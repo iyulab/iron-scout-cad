@@ -12,21 +12,21 @@ When a value cannot be established, the library returns **"unknown"** as a first
 
 ## 2. Provenance and confidence travel with every entity
 
-The entity model this library consumes carries, for every entity: a **reference ID**, a **provenance** (where the entity came from), and a **confidence** (how far its values can be trusted, including "unknown").
+The [uncad-model](https://github.com/iyulab/uncad-model) entity model this library consumes carries, for every entity: a **reference ID**, a **provenance** (where the entity came from), and a **confidence** (how far its values can be trusted, including "unknown").
 
 - Confidence never rises on its own. A value that arrived with low confidence is never reported with a higher one, whatever this library does to it.
 - The library does not need to know *why* an entity has low confidence. It acts on the marker alone.
 - Entities the upstream parser could not interpret arrive as "unrecognized" and are preserved as such. Nothing is silently dropped.
 
-*What this costs:* every summary, reference and diff has to carry these markers through. There is no shortcut path that strips them.
+*What this costs:* every summary and reference has to carry these markers through. There is no shortcut path that strips them.
 
 ## 3. One reference scheme
 
-An entity reference issued here is accepted as-is by [iron-hand-cad](https://github.com/iyulab/iron-hand-cad). The two libraries do not maintain separate coordinate or reference systems. If "here" can mean two different things on the two sides, the design is wrong.
+An entity reference issued here is accepted as-is by [iron-hand-cad](https://github.com/iyulab/iron-hand-cad) and used as the matching key by [iron-diff-cad](https://github.com/iyulab/iron-diff-cad). These libraries do not maintain separate coordinate or reference systems. If "here" can mean two different things on the two sides, the design is wrong.
 
 ## 4. Verification is a numeric diff
 
-The only accepted evidence that a change did what was intended is the numeric difference between two model states. Comparing rendered images is not verification: tolerances are invisible in a render, and "looks right" is not "is right".
+The only accepted evidence that a change did what was intended is the numeric difference between two model states, produced by [iron-diff-cad](https://github.com/iyulab/iron-diff-cad). Comparing rendered images is not verification: tolerances are invisible in a render, and "looks right" is not "is right".
 
 Tests follow the same rule — no test decides pass/fail by comparing renders.
 
