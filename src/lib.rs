@@ -10,9 +10,8 @@
 //! confidence than the entities it was made from. The input is never
 //! modified, and the same drawing gives the same summary, byte for byte.
 //!
-//! The verb set of this crate is two read-only verbs, and it is a draft:
-//! `docs/principles.md` section 5 makes a new verb a proposal, and these
-//! are the first two.
+//! The verb set of this crate is these two read-only verbs.
+//! `docs/principles.md` section 5 makes a new verb a proposal.
 
 #![forbid(unsafe_code)]
 
