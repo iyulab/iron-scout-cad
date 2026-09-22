@@ -1,0 +1,35 @@
+[package]
+name = "iron-scout-cad"
+version = "0.1.0"
+edition = "2021"
+# Minimum supported Rust version. Measured, not guessed, and checked by CI's
+# `msrv` job with exactly this toolchain -- raise the two together.
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/iyulab/iron-scout-cad"
+homepage = "https://github.com/iyulab/iron-scout-cad"
+readme = "README.md"
+description = "Deterministic eyes for CAD drawings: a compact summary of an uncad-model drawing, and hit-testing a point to entity references."
+keywords = ["cad", "dxf", "summary", "hit-test", "geometry"]
+categories = ["algorithms", "data-structures"]
+
+[lints.rust]
+# Plain data in, plain data out: there is no reason for `unsafe` here.
+unsafe_code = "forbid"
+
+[lints.clippy]
+# Same input, same bytes: nothing this crate outputs may depend on a hash
+# collection's iteration order, which `std` randomizes per instance. The main
+# guard is clippy.toml's `disallowed-types`; this restriction lint additionally
+# covers `for` loops over any other hash-based type.
+iter_over_hash_type = "warn"
+
+[dependencies]
+# The model the drawing is expressed in. A version dependency, never a path:
+# this crate must build from a standalone checkout.
+uncad-model = "0.1.0"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+# The golden models the tests read are the model's JSON form.
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

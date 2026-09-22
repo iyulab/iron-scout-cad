@@ -20,7 +20,26 @@ Built as a tool to be handed to an agent. It contains no AI of its own.
 
 ## Status
 
-Pre-implementation. No code yet. The design principles are settled and documented in [docs/principles.md](docs/principles.md); read that before proposing anything.
+0.x, first code. Two read-only verbs, and the verb set itself is a draft (a new verb is a proposal under [docs/principles.md](docs/principles.md), section 5):
+
+- `summarize(&db)` — entity counts by type, layers and block definitions with how much sits on each, every attribute value a block reference carries (by its tag), and loose text pairs that read as label and value by position. `Summary::attribute(tag)` and `Summary::labelled(label)` answer "what is the value of X" as exactly one value, none, or several listed — never a pick.
+- `hit_test(&db, point, tolerance)` — every entity whose geometry passes within the tolerance, nearest first and never narrowed to one; closed entities that enclose the point, separately; and the entity types the crate cannot hit-test yet, named. Only the drawing's own entities are searched: what a block reference draws through its definition is not yet transformed.
+
+The same drawing gives the same output, byte for byte; the input is never modified; no output carries a higher confidence than the entities it came from. Read [docs/principles.md](docs/principles.md) before proposing anything.
+
+```rust
+let db: uncad_model::CadDatabase = /* from a parser, or from its JSON */;
+let summary = iron_scout_cad::summarize(&db);
+match summary.attribute("DWGNO") {
+    iron_scout_cad::Lookup::Unique(number) => println!("{number}"),
+    iron_scout_cad::Lookup::Absent => println!("no such attribute"),
+    iron_scout_cad::Lookup::Ambiguous(all) => println!("several: {all:?}"),
+}
+let at = iron_scout_cad::hit_test(&db, uncad_model::Point2D { x: 25.0, y: 20.0 }, 0.01);
+for hit in &at.hits {
+    println!("{:?} {} at {}", hit.id, hit.entity_type, hit.distance);
+}
+```
 
 ## License
 
