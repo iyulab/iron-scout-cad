@@ -3,7 +3,7 @@
 //! two drawing numbers (G9), and a title block of loose texts (G7).
 
 use iron_scout_cad::{summarize, Lookup};
-use uncad_model::model::{Confidence, Ref};
+use uncad_model::model::{Confidence, Entity, EntityId, Ref};
 use uncad_model::CadDatabase;
 
 fn golden(json: &str) -> CadDatabase {
@@ -133,4 +133,61 @@ fn the_summary_serializes_with_the_lookup_in_the_models_convention() {
     assert_eq!(json, r#"{"type":"AMBIGUOUS","data":["BP-1042","BP-2077"]}"#);
     let json = serde_json::to_string(&s.attribute("NONE")).unwrap();
     assert_eq!(json, r#"{"type":"ABSENT"}"#);
+}
+
+/// G7 with a second text drawn exactly on top of one of its values, under a
+/// fresh reference ID.
+fn g7_with_a_text_over(target_id: u64, text: &str) -> CadDatabase {
+    let mut db = g7();
+    let twin = db
+        .entities
+        .iter()
+        .find_map(|e| match e {
+            Entity::Text(t) if t.common.id == EntityId::new(target_id) => Some(t.clone()),
+            _ => None,
+        })
+        .expect("G7 has that text");
+    let mut over = twin;
+    over.common.id = EntityId::new(9_000);
+    over.text = text.to_string();
+    db.entities.push(Entity::Text(over));
+    db
+}
+
+#[test]
+fn two_texts_at_the_same_nearest_distance_are_both_listed_and_the_lookup_is_ambiguous() {
+    // The value of "DWG NO" in G7 is the text with ID 262; a different text
+    // drawn on top of it is just as near, and neither is picked.
+    let s = summarize(&g7_with_a_text_over(262, "BP-2077"));
+    let dwg_no: Vec<&str> = s
+        .labelled_texts
+        .iter()
+        .filter(|l| l.label.text == "DWG NO")
+        .map(|l| l.value.text.as_str())
+        .collect();
+    assert_eq!(
+        dwg_no,
+        ["BP-1042", "BP-2077"],
+        "listed once per candidate, by ID"
+    );
+    assert_eq!(
+        s.labelled("DWG NO"),
+        Lookup::Ambiguous(vec!["BP-1042", "BP-2077"])
+    );
+    // The other rows are untouched.
+    assert_eq!(s.labelled("REV"), Lookup::Unique("B"));
+}
+
+#[test]
+fn the_same_text_drawn_twice_is_still_one_value() {
+    let s = summarize(&g7_with_a_text_over(262, "BP-1042"));
+    assert_eq!(s.labelled("DWG NO"), Lookup::Unique("BP-1042"));
+    assert_eq!(
+        s.labelled_texts
+            .iter()
+            .filter(|l| l.label.text == "DWG NO")
+            .count(),
+        2,
+        "both carriers are listed; the value is one"
+    );
 }

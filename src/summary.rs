@@ -50,7 +50,10 @@ pub struct TextRef {
 /// Two loose TEXT entities that read as a label and its value: on the same
 /// row, the value the nearest text to the right of the label. Nothing but
 /// position ties them, which is how a title block drawn without a block
-/// carries its fields.
+/// carries its fields. When several texts are nearest at the same distance
+/// (texts drawn on top of each other), the label is listed once per
+/// candidate, and [`Summary::labelled`] then answers with every distinct
+/// value rather than picking one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LabelledText {
     pub label: TextRef,
@@ -203,7 +206,9 @@ fn is_space(name: &str) -> bool {
 /// to its right on the same row (within half a text height vertically) is
 /// its value. A text with nothing to its right is a label of nothing and is
 /// not listed; a text may be the value of one label and the label of the
-/// next, which is what a row of three reads as.
+/// next, which is what a row of three reads as. Several texts at the same
+/// nearest distance are all listed (by ID) -- a tie is not broken by
+/// picking one.
 fn labelled_texts(db: &CadDatabase) -> Vec<LabelledText> {
     let texts: Vec<_> = db
         .entities
@@ -220,15 +225,23 @@ fn labelled_texts(db: &CadDatabase) -> Vec<LabelledText> {
                 <= label.text_height.max(t.text_height) / 2.0
                 && t.start_point.x > label.start_point.x
         };
-        let value = texts
+        let candidates: Vec<_> = texts
             .iter()
             .filter(|t| t.common.id != label.common.id && same_row(t))
-            .min_by(|a, b| {
-                (a.start_point.x - label.start_point.x)
-                    .total_cmp(&(b.start_point.x - label.start_point.x))
-                    .then(a.common.id.cmp(&b.common.id))
-            });
-        if let Some(value) = value {
+            .collect();
+        let Some(nearest) = candidates
+            .iter()
+            .map(|t| t.start_point.x - label.start_point.x)
+            .min_by(f64::total_cmp)
+        else {
+            continue;
+        };
+        let mut values: Vec<_> = candidates
+            .into_iter()
+            .filter(|t| t.start_point.x - label.start_point.x == nearest)
+            .collect();
+        values.sort_by_key(|t| t.common.id);
+        for value in values {
             pairs.push(LabelledText {
                 label: TextRef {
                     id: label.common.id,
@@ -242,6 +255,6 @@ fn labelled_texts(db: &CadDatabase) -> Vec<LabelledText> {
             });
         }
     }
-    pairs.sort_by_key(|l| l.label.id);
+    pairs.sort_by_key(|l| (l.label.id, l.value.id));
     pairs
 }
