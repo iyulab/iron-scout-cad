@@ -36,6 +36,18 @@ fn repeated_hit_tests_are_byte_identical() {
 }
 
 #[test]
+fn repeated_hit_tests_through_nested_blocks_are_byte_identical() {
+    let db: CadDatabase = serde_json::from_str(include_str!("golden/g2.expected.json"))
+        .expect("the golden model deserializes");
+    let point = Point2D { x: 110.0, y: 100.0 };
+    let first = serde_json::to_string(&hit_test(&db, point, 0.5)).unwrap();
+    for run in 1..RUNS {
+        let again = serde_json::to_string(&hit_test(&db, point, 0.5)).unwrap();
+        assert_eq!(first, again, "run {run}: the hit test changed");
+    }
+}
+
+#[test]
 fn the_input_is_never_modified() {
     let db = g1();
     let before = serde_json::to_string(&db).unwrap();

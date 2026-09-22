@@ -1,8 +1,9 @@
-//! Pointing, checked on the golden cases: a hole of the general part (G1)
-//! and two coincident lines (G6).
+//! Pointing, checked on the golden cases: a hole of the general part (G1),
+//! two coincident lines (G6), a line three block references deep (G2) and
+//! a reference to a block that does not exist (G10).
 
-use iron_scout_cad::hit_test;
-use uncad_model::model::{Confidence, Entity, EntityId};
+use iron_scout_cad::{hit_test, Hit, NotSearched, NotSearchedReason};
+use uncad_model::model::{Confidence, Entity, EntityId, Ref};
 use uncad_model::{CadDatabase, Point2D};
 
 fn golden(json: &str) -> CadDatabase {
@@ -125,4 +126,256 @@ fn a_text_is_hit_at_its_anchor_and_says_so() {
         .collect();
     assert_eq!(attribs.len(), 1);
     assert!(attribs[0].anchored);
+}
+
+// --- block references -------------------------------------------------
+
+fn g2() -> CadDatabase {
+    serde_json::from_str(include_str!("golden/g2.expected.json"))
+        .expect("the golden model deserializes")
+}
+
+fn g10() -> CadDatabase {
+    serde_json::from_str(include_str!("golden/g10.expected.json"))
+        .expect("the golden model deserializes")
+}
+
+fn ids(hits: &[Hit]) -> Vec<(EntityId, Vec<EntityId>)> {
+    hits.iter().map(|h| (h.id, h.via.clone())).collect()
+}
+
+#[test]
+fn a_line_three_blocks_deep_is_hit_where_the_composed_placement_draws_it() {
+    // G2: a line (0,0)-(10,0) in block C, placed in B at (5,0) turned a
+    // quarter, B in A scaled 2, A in the drawing at (100,100): the line is
+    // drawn from (110,100) to (110,120).
+    let db = g2();
+    let r = hit_test(&db, Point2D { x: 110.0, y: 110.0 }, 0.5);
+    assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+    let hit = &r.hits[0];
+    assert_eq!(hit.entity_type, "LINE");
+    assert_eq!(hit.distance, 0.0);
+    assert!(!hit.anchored);
+    assert_eq!(
+        hit.via.len(),
+        3,
+        "reached through three INSERTs: {:?}",
+        hit.via
+    );
+    assert!(r.not_searched.is_empty());
+    assert!(r.unsupported.is_empty());
+
+    // Just beside the line: nothing.
+    let r = hit_test(&db, Point2D { x: 112.0, y: 110.0 }, 0.5);
+    assert!(r.hits.is_empty(), "{:?}", r.hits);
+}
+
+#[test]
+fn nested_block_references_are_hit_at_their_placed_insertion_points() {
+    let db = g2();
+    // A is inserted at (100,100); B sits at A's origin, so its placed
+    // insertion point is (100,100) too. Both are anchored hits; the outer
+    // one has no chain, the inner one is reached through the outer.
+    let r = hit_test(&db, Point2D { x: 100.0, y: 100.0 }, 0.5);
+    assert_eq!(r.hits.len(), 2, "{:?}", r.hits);
+    assert!(r
+        .hits
+        .iter()
+        .all(|h| h.entity_type == "INSERT" && h.anchored && h.distance == 0.0));
+    // Equally near, so ordered by reference ID -- not by depth.
+    assert!(r.hits[0].id < r.hits[1].id);
+    let outer = r
+        .hits
+        .iter()
+        .find(|h| h.via.is_empty())
+        .expect("the drawing's own INSERT");
+    let inner = r
+        .hits
+        .iter()
+        .find(|h| !h.via.is_empty())
+        .expect("the nested INSERT");
+    assert_eq!(inner.via, [outer.id]);
+
+    // C sits at (5,0) in B, scaled 2 by A: placed at (110,100), where the
+    // line's start point also is. Nearest first, then by ID.
+    let r = hit_test(&db, Point2D { x: 110.0, y: 100.0 }, 0.5);
+    let kinds: Vec<&str> = r.hits.iter().map(|h| h.entity_type.as_str()).collect();
+    assert_eq!(kinds.len(), 2, "{:?}", r.hits);
+    assert!(kinds.contains(&"LINE") && kinds.contains(&"INSERT"));
+    assert!(r.hits.iter().all(|h| h.distance == 0.0));
+    let line = r.hits.iter().find(|h| h.entity_type == "LINE").unwrap();
+    let insert = r.hits.iter().find(|h| h.entity_type == "INSERT").unwrap();
+    assert_eq!(line.via.len(), 3);
+    assert_eq!(insert.via.len(), 2);
+    assert_eq!(&line.via[..2], &insert.via[..]);
+}
+
+#[test]
+fn a_reference_to_no_block_is_reported_not_skipped() {
+    // G10: an INSERT whose block reference is absent. The reference itself
+    // is still anchored at its insertion point; what it would draw is
+    // reported as not searched, with the reason.
+    let db = g10();
+    let insert = db
+        .entities
+        .iter()
+        .find_map(|e| match e {
+            Entity::Insert(i) => Some(i),
+            _ => None,
+        })
+        .expect("G10 has a block reference");
+    let at = Point2D {
+        x: insert.insertion_point.x,
+        y: insert.insertion_point.y,
+    };
+    let r = hit_test(&db, at, 0.5);
+    assert_eq!(ids(&r.hits), [(insert.common.id, vec![])]);
+    assert_eq!(
+        r.not_searched,
+        [NotSearched {
+            id: insert.common.id,
+            entity_type: "INSERT".into(),
+            via: vec![],
+            reason: NotSearchedReason::BlockReferenceAbsent,
+        }]
+    );
+    // Far away: the reason is still reported -- it does not depend on the point.
+    let r = hit_test(&db, Point2D { x: -1e6, y: -1e6 }, 0.5);
+    assert_eq!(r.not_searched.len(), 1);
+}
+
+/// A drawing whose one block holds a circle, placed by one INSERT with the
+/// given per-axis scale.
+fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
+    use uncad_model::model::{CircleEntity, EntityCommon, InsertEntity, Origin, Point3D};
+    use uncad_model::tables::BlockRecord;
+    let common = |id: u64| EntityCommon {
+        id: EntityId::new(id),
+        origin: Origin::Vector,
+        confidence: Confidence::High,
+        source_handle: Ref::Absent,
+        layer: Ref::Resolved("0".into()),
+        color_index: 256,
+        true_color: None,
+    };
+    let circle = Entity::Circle(CircleEntity {
+        common: common(1),
+        center: Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        },
+        radius: 5.0,
+    });
+    let insert = Entity::Insert(InsertEntity {
+        common: common(2),
+        block_name: Ref::Resolved("HOLE".into()),
+        insertion_point: Point3D {
+            x: 50.0,
+            y: 50.0,
+            z: 0.0,
+        },
+        scale: Point3D {
+            x: x_scale,
+            y: y_scale,
+            z: 1.0,
+        },
+        rotation: 0.0,
+        attribs: Vec::new(),
+    });
+    let mut db = CadDatabase {
+        entities: vec![insert],
+        tables: Default::default(),
+        read_diagnostics: Default::default(),
+    };
+    db.tables.block_records.insert(
+        "HOLE".into(),
+        BlockRecord {
+            name: "HOLE".into(),
+            entities: vec![circle],
+        },
+    );
+    db
+}
+
+#[test]
+fn a_circle_in_a_uniformly_scaled_block_is_a_circle_of_the_scaled_radius() {
+    let db = circle_in_a_block(2.0, 2.0);
+    // Radius 5 scaled 2 around (50,50): the edge passes through (60,50).
+    let r = hit_test(&db, Point2D { x: 60.0, y: 50.0 }, 0.01);
+    assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+    assert_eq!(r.hits[0].entity_type, "CIRCLE");
+    assert_eq!(r.hits[0].via, [EntityId::new(2)]);
+    // The centre is enclosed, not hit.
+    let r = hit_test(&db, Point2D { x: 50.0, y: 50.0 }, 0.01);
+    assert_eq!(r.enclosing.len(), 1);
+    assert_eq!(r.hits.len(), 1, "the INSERT's own anchor");
+    assert!(r.hits[0].anchored);
+}
+
+#[test]
+fn a_circle_in_a_stretched_block_is_not_guessed_at() {
+    let db = circle_in_a_block(2.0, 1.0);
+    let r = hit_test(&db, Point2D { x: 60.0, y: 50.0 }, 0.01);
+    assert!(r.hits.is_empty(), "{:?}", r.hits);
+    assert_eq!(
+        r.not_searched,
+        [NotSearched {
+            id: EntityId::new(1),
+            entity_type: "CIRCLE".into(),
+            via: vec![EntityId::new(2)],
+            reason: NotSearchedReason::NonSimilarPlacement,
+        }]
+    );
+}
+
+#[test]
+fn a_block_that_references_itself_ends_with_the_depth_reported() {
+    use uncad_model::model::{EntityCommon, InsertEntity, Origin, Point3D};
+    use uncad_model::tables::BlockRecord;
+    let common = |id: u64| EntityCommon {
+        id: EntityId::new(id),
+        origin: Origin::Vector,
+        confidence: Confidence::High,
+        source_handle: Ref::Absent,
+        layer: Ref::Resolved("0".into()),
+        color_index: 256,
+        true_color: None,
+    };
+    let refer = |id: u64| {
+        Entity::Insert(InsertEntity {
+            common: common(id),
+            block_name: Ref::Resolved("LOOP".into()),
+            insertion_point: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            scale: Point3D {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            rotation: 0.0,
+            attribs: Vec::new(),
+        })
+    };
+    let mut db = CadDatabase {
+        entities: vec![refer(1)],
+        tables: Default::default(),
+        read_diagnostics: Default::default(),
+    };
+    db.tables.block_records.insert(
+        "LOOP".into(),
+        BlockRecord {
+            name: "LOOP".into(),
+            entities: vec![refer(2)],
+        },
+    );
+    let r = hit_test(&db, Point2D { x: 0.0, y: 0.0 }, 0.5);
+    assert!(r
+        .not_searched
+        .iter()
+        .any(|n| n.reason == NotSearchedReason::NestingTooDeep));
+    assert!(r.hits.len() > 1 && r.hits.len() < 100, "{}", r.hits.len());
 }

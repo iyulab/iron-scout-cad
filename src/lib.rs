@@ -6,8 +6,10 @@
 //! Nothing here infers. A value that cannot be established is reported as
 //! such -- an attribute that several title blocks give different values for
 //! is [`Lookup::Ambiguous`] with every value, a point that two coincident
-//! lines pass through is two hits -- and a summary never carries a higher
-//! confidence than the entities it was made from. The input is never
+//! lines pass through is two hits, what a block reference draws is searched
+//! in place and what could not be searched is listed with its reason -- and
+//! a summary never carries a higher confidence than the entities it was
+//! made from. The input is never
 //! modified, and the same drawing gives the same summary, byte for byte.
 //!
 //! The verb set of this crate is these two read-only verbs.
@@ -19,7 +21,7 @@ mod geometry;
 mod hit_test;
 mod summary;
 
-pub use hit_test::{hit_test, Hit, HitTest};
+pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason};
 pub use summary::{
     summarize, AttributeValue, BlockSummary, LabelledText, LayerSummary, Lookup, Summary, TextRef,
 };
