@@ -212,9 +212,11 @@ fn nested_block_references_are_hit_at_their_placed_insertion_points() {
 
 #[test]
 fn a_reference_to_no_block_is_reported_not_skipped() {
-    // G10: an INSERT whose block reference is absent. The reference itself
-    // is still anchored at its insertion point; what it would draw is
-    // reported as not searched, with the reason.
+    // G10: an INSERT naming a block the file never defines, so the
+    // reference is unresolved and keeps that name. The reference itself is
+    // still anchored at its insertion point; what it would draw is reported
+    // as not searched, with the reason -- and the reason distinguishes this
+    // from a file that points at no block at all.
     let db = g10();
     let insert = db
         .entities
@@ -236,7 +238,7 @@ fn a_reference_to_no_block_is_reported_not_skipped() {
             id: insert.common.id,
             entity_type: "INSERT".into(),
             via: vec![],
-            reason: NotSearchedReason::BlockReferenceAbsent,
+            reason: NotSearchedReason::BlockReferenceUnresolved,
         }]
     );
     // Far away: the reason is still reported -- it does not depend on the point.
