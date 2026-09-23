@@ -259,6 +259,7 @@ fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
         layer: Ref::Resolved("0".into()),
         color_index: 256,
         true_color: None,
+        invisible: false,
     };
     let circle = Entity::Circle(CircleEntity {
         common: common(1),
@@ -343,6 +344,7 @@ fn a_block_that_references_itself_ends_with_the_depth_reported() {
         layer: Ref::Resolved("0".into()),
         color_index: 256,
         true_color: None,
+        invisible: false,
     };
     let refer = |id: u64| {
         Entity::Insert(InsertEntity {
