@@ -71,9 +71,12 @@ pub enum NotSearchedReason {
     BlockReferenceUnresolved,
     /// The block name resolves but no block record of that name exists.
     BlockUndefined,
-    /// The composed placement is not a similarity (it scales the axes
-    /// differently, or mirrors), so what it does to this entity's circle or
-    /// arc is not a circle or an arc, and this crate does not guess.
+    /// The placement of this entity's circle or arc is not one this crate
+    /// measures in: the composed block placement is not a similarity (it
+    /// scales the axes differently, or mirrors), or the circle or arc is
+    /// written in its own coordinate system rather than the world's (an
+    /// extrusion other than the world Z axis -- a mirror copy, or a tilted
+    /// plane). This crate does not guess where it is drawn.
     NonSimilarPlacement,
     /// Block references nest deeper than the search follows.
     NestingTooDeep,
@@ -114,6 +117,13 @@ pub struct HitTest {
     pub not_searched: Vec<NotSearched>,
 }
 
+/// Whether an entity written in its own coordinate system is in the world's:
+/// its extrusion is the world Z axis, give or take the rounding files write
+/// it with.
+fn in_world_plane(extrusion: uncad_model::Point3D) -> bool {
+    extrusion.z > 0.0 && extrusion.x.abs().max(extrusion.y.abs()) <= 1e-9 * extrusion.z
+}
+
 /// Where a point's geometry is, for one entity.
 enum Where {
     /// Distance to the drawn geometry, and whether the point is inside a
@@ -142,7 +152,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             inside: false,
         },
         Entity::Circle(c) => {
-            let Some(s) = scale else {
+            let Some(s) = scale.filter(|_| in_world_plane(c.extrusion)) else {
                 return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
             };
             let r = c.radius * s;
@@ -153,7 +163,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             }
         }
         Entity::Arc(a) => {
-            let Some(s) = scale else {
+            let Some(s) = scale.filter(|_| in_world_plane(a.extrusion)) else {
                 return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
             };
             let turn = t.rotation();

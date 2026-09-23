@@ -269,6 +269,11 @@ fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
             z: 0.0,
         },
         radius: 5.0,
+        extrusion: Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     });
     let insert = Entity::Insert(InsertEntity {
         common: common(2),
@@ -419,4 +424,33 @@ fn a_hidden_entity_is_still_hit_and_says_it_is_hidden() {
     assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
     assert!(r.hits[0].invisible, "hidden through its reference");
     assert_eq!(r.hits[0].via, shown.hits[0].via);
+}
+
+#[test]
+fn a_circle_written_in_its_own_plane_is_not_searched_and_says_why() {
+    // G7's mirror copies: a circle drawn at (170, -50) and an arc about
+    // (110, -50), both written with extrusion (0, 0, -1). Where they are
+    // drawn is a coordinate transform this crate does not make, so they are
+    // listed as not searched rather than measured in the wrong place.
+    let db: CadDatabase = serde_json::from_str(include_str!("golden/g7.expected.json"))
+        .expect("the golden model deserializes");
+    let r = hit_test(&db, Point2D { x: 173.0, y: -50.0 }, 0.5);
+    assert!(
+        r.hits.iter().all(|h| h.entity_type != "CIRCLE"),
+        "{:?}",
+        r.hits
+    );
+    let reasons: Vec<(&str, NotSearchedReason)> = r
+        .not_searched
+        .iter()
+        .map(|n| (n.entity_type.as_str(), n.reason))
+        .collect();
+    assert!(
+        reasons.contains(&("CIRCLE", NotSearchedReason::NonSimilarPlacement)),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons.contains(&("ARC", NotSearchedReason::NonSimilarPlacement)),
+        "{reasons:?}"
+    );
 }
