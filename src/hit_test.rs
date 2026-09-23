@@ -71,12 +71,12 @@ pub enum NotSearchedReason {
     BlockReferenceUnresolved,
     /// The block name resolves but no block record of that name exists.
     BlockUndefined,
-    /// The placement of this entity's circle or arc is not one this crate
-    /// measures in: the composed block placement is not a similarity (it
-    /// scales the axes differently, or mirrors), or the circle or arc is
-    /// written in its own coordinate system rather than the world's (an
-    /// extrusion other than the world Z axis -- a mirror copy, or a tilted
-    /// plane). This crate does not guess where it is drawn.
+    /// The placement of this entity is not one this crate measures in: the
+    /// composed block placement is not a similarity (it scales the axes
+    /// differently, or mirrors) for a circle or arc, or the circle, arc or
+    /// polyline is written in its own coordinate system rather than the
+    /// world's (an extrusion other than the world Z axis -- a mirror copy, or
+    /// a tilted plane). This crate does not guess where it is drawn.
     NonSimilarPlacement,
     /// Block references nest deeper than the search follows.
     NestingTooDeep,
@@ -177,6 +177,9 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
                 ),
                 inside: false,
             }
+        }
+        Entity::LwPolyline(pl) | Entity::Polyline2D(pl) if !in_world_plane(pl.extrusion) => {
+            Where::NotSearched(NotSearchedReason::NonSimilarPlacement)
         }
         Entity::LwPolyline(pl) | Entity::Polyline2D(pl) => {
             // TODO(bulge): arc segments are still measured as their chords.
