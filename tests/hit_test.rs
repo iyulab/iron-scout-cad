@@ -1,6 +1,7 @@
 //! Pointing, checked on the golden cases: a hole of the general part (G1),
-//! two coincident lines (G6), a line three block references deep (G2) and
-//! a reference to a block that does not exist (G10).
+//! two coincident lines (G6), a line three block references deep (G2), a
+//! reference to a block that does not exist (G10), and mirror copies of a
+//! circle, an arc and a bulged polyline (G7).
 
 use iron_scout_cad::{hit_test, Hit, NotSearched, NotSearchedReason};
 use uncad_model::model::{Confidence, Entity, EntityId, Ref};
@@ -426,31 +427,77 @@ fn a_hidden_entity_is_still_hit_and_says_it_is_hidden() {
     assert_eq!(r.hits[0].via, shown.hits[0].via);
 }
 
+fn g7() -> CadDatabase {
+    golden(include_str!("golden/g7.expected.json"))
+}
+
+fn types_hit(r: &iron_scout_cad::HitTest) -> Vec<&str> {
+    r.hits.iter().map(|h| h.entity_type.as_str()).collect()
+}
+
 #[test]
-fn a_circle_written_in_its_own_plane_is_not_searched_and_says_why() {
-    // G7's mirror copies: a circle drawn at (170, -50) and an arc about
-    // (110, -50), both written with extrusion (0, 0, -1). Where they are
-    // drawn is a coordinate transform this crate does not make, so they are
-    // listed as not searched rather than measured in the wrong place.
-    let db: CadDatabase = serde_json::from_str(include_str!("golden/g7.expected.json"))
-        .expect("the golden model deserializes");
-    let r = hit_test(&db, Point2D { x: 173.0, y: -50.0 }, 0.5);
+fn a_mirror_copied_circle_is_hit_where_it_is_drawn() {
+    // G7's mirror copy of a circle: written at (-170, -50) with extrusion
+    // (0, 0, -1), drawn at (170, -50), radius 3.
+    let r = hit_test(&g7(), p(173.0, -50.0), 0.5);
+    assert!(types_hit(&r).contains(&"CIRCLE"), "{:?}", r.hits);
+    assert!(r.not_searched.is_empty(), "{:?}", r.not_searched);
+    // Where it is written, nothing is drawn.
+    let r = hit_test(&g7(), p(-173.0, -50.0), 0.5);
+    assert!(!types_hit(&r).contains(&"CIRCLE"), "{:?}", r.hits);
+}
+
+#[test]
+fn a_mirror_copied_arc_keeps_its_side_of_the_circle() {
+    // G7's mirror copy of an arc from 30 to 150 degrees about (-110, -50),
+    // radius 4: drawn about (110, -50), still over the top of its circle.
+    let top = hit_test(&g7(), p(110.0, -46.0), 0.5);
+    assert!(types_hit(&top).contains(&"ARC"), "{:?}", top.hits);
+    let bottom = hit_test(&g7(), p(110.0, -54.0), 0.5);
+    assert!(!types_hit(&bottom).contains(&"ARC"), "{:?}", bottom.hits);
+}
+
+#[test]
+fn a_mirror_copied_polyline_arc_is_measured_along_the_arc() {
+    // G7's mirror-copied triangle, drawn through (150, -58), (140, -58) and
+    // (145, -53); the edge from (140, -58) to (145, -53) bulges 0.5 in its
+    // own plane, outward from the triangle once drawn. A point 0.6 off the
+    // chord toward the arc is 0.6 from the chord but about 1.17 from the
+    // arc: not on the outline, and inside the shape the arc bounds.
+    let k = 0.6 / 2f64.sqrt();
+    let r = hit_test(&g7(), p(142.5 - k, -55.5 + k), 0.7);
+    assert!(!types_hit(&r).contains(&"LWPOLYLINE"), "{:?}", r.hits);
     assert!(
-        r.hits.iter().all(|h| h.entity_type != "CIRCLE"),
+        r.enclosing.iter().any(|h| h.entity_type == "LWPOLYLINE"),
         "{:?}",
-        r.hits
+        r.enclosing
     );
-    let reasons: Vec<(&str, NotSearchedReason)> = r
-        .not_searched
-        .iter()
-        .map(|n| (n.entity_type.as_str(), n.reason))
-        .collect();
+    // The arc's middle, the sagitta (0.5 * chord / 2) off the chord.
+    let sag = 0.5 * 50f64.sqrt() / 2.0 / 2f64.sqrt();
+    let r = hit_test(&g7(), p(142.5 - sag, -55.5 + sag), 1e-9);
+    assert!(types_hit(&r).contains(&"LWPOLYLINE"), "{:?}", r.hits);
+}
+
+#[test]
+fn a_circle_on_a_tilted_plane_is_not_searched_and_says_why() {
+    // Seen from above, a circle on a tilted plane is an ellipse; this crate
+    // does not guess where its outline is drawn.
+    let mut db = g7();
+    for e in &mut db.entities {
+        if let Entity::Circle(c) = e {
+            c.extrusion = uncad_model::Point3D {
+                x: 1.0,
+                y: 0.0,
+                z: 1.0,
+            };
+        }
+    }
+    let r = hit_test(&db, p(173.0, -50.0), 0.5);
     assert!(
-        reasons.contains(&("CIRCLE", NotSearchedReason::NonSimilarPlacement)),
-        "{reasons:?}"
-    );
-    assert!(
-        reasons.contains(&("ARC", NotSearchedReason::NonSimilarPlacement)),
-        "{reasons:?}"
+        r.not_searched.iter().any(
+            |n| n.entity_type == "CIRCLE" && n.reason == NotSearchedReason::NonSimilarPlacement
+        ),
+        "{:?}",
+        r.not_searched
     );
 }

@@ -14,11 +14,12 @@
 //! places in the drawing. What could not be searched is said so, with the
 //! reason.
 
-use crate::geometry::{distance, distance_to_arc, distance_to_polyline, polygon_contains, xy};
+use crate::geometry::{distance, distance_to_arc, distance_to_segments, shape_contains, xy};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{Confidence, Entity, EntityId, Ref};
-use uncad_model::{Affine2, CadDatabase, Point2D};
+use uncad_model::{Affine2, CadDatabase, Ocs, Point2D, Point3D, PolylineVertex};
 
 /// How deep block references may nest before the search stops following
 /// them. Real drawings nest a few levels; a definition that references
@@ -73,10 +74,11 @@ pub enum NotSearchedReason {
     BlockUndefined,
     /// The placement of this entity is not one this crate measures in: the
     /// composed block placement is not a similarity (it scales the axes
-    /// differently, or mirrors) for a circle or arc, or the circle, arc or
-    /// polyline is written in its own coordinate system rather than the
-    /// world's (an extrusion other than the world Z axis -- a mirror copy, or
-    /// a tilted plane). This crate does not guess where it is drawn.
+    /// differently, or mirrors) for a circle, an arc or a polyline with arc
+    /// segments -- a circle would be drawn as an ellipse -- or the circle,
+    /// arc or polyline is written on a plane tilted out of the world's (a
+    /// plane facing up or down, a mirror copy's included, is measured). This
+    /// crate does not guess where it is drawn.
     NonSimilarPlacement,
     /// Block references nest deeper than the search follows.
     NestingTooDeep,
@@ -117,11 +119,30 @@ pub struct HitTest {
     pub not_searched: Vec<NotSearched>,
 }
 
-/// Whether an entity written in its own coordinate system is in the world's:
-/// its extrusion is the world Z axis, give or take the rounding files write
-/// it with.
-fn in_world_plane(extrusion: uncad_model::Point3D) -> bool {
-    extrusion.z > 0.0 && extrusion.x.abs().max(extrusion.y.abs()) <= 1e-9 * extrusion.z
+/// The coordinate system of an entity written in its own plane, when that
+/// plane is parallel to the world's -- facing up, or down as a mirror copy's
+/// does -- so that what is drawn there is seen from above undistorted.
+/// `None` for a tilted plane, or an extrusion that names none.
+fn flat_plane(extrusion: Point3D) -> Option<Ocs> {
+    Ocs::of(extrusion).filter(|o| o.is_flat())
+}
+
+/// A point of `plane` taken to the world, seen from above.
+fn world_xy(plane: Ocs, p: Point3D) -> Point2D {
+    xy(plane.to_world(p))
+}
+
+/// The world direction (radians) of the direction `angle` in `plane`.
+fn world_angle(plane: Ocs, angle: f64) -> f64 {
+    let d = world_xy(
+        plane,
+        Point3D {
+            x: angle.cos(),
+            y: angle.sin(),
+            z: 0.0,
+        },
+    );
+    d.y.atan2(d.x)
 }
 
 /// Where a point's geometry is, for one entity.
@@ -152,42 +173,76 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             inside: false,
         },
         Entity::Circle(c) => {
-            let Some(s) = scale.filter(|_| in_world_plane(c.extrusion)) else {
+            let (Some(plane), Some(s)) = (flat_plane(c.extrusion), scale) else {
                 return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
             };
             let r = c.radius * s;
-            let d = distance(p, at(xy(c.center)));
+            let d = distance(p, at(world_xy(plane, c.center)));
             Where::Geometry {
                 distance: (d - r).abs(),
                 inside: d < r,
             }
         }
         Entity::Arc(a) => {
-            let Some(s) = scale.filter(|_| in_world_plane(a.extrusion)) else {
+            let (Some(plane), Some(s)) = (flat_plane(a.extrusion), scale) else {
                 return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
+            };
+            // Seen from below (a mirror copy's plane) the arc's own
+            // counter-clockwise sweep runs clockwise in the world, so its
+            // world start is where its own end is.
+            let (start, end) = (
+                world_angle(plane, a.start_angle),
+                world_angle(plane, a.end_angle),
+            );
+            let (start, end) = if plane.z_axis().z < 0.0 {
+                (end, start)
+            } else {
+                (start, end)
             };
             let turn = t.rotation();
             Where::Geometry {
                 distance: distance_to_arc(
                     p,
-                    at(xy(a.center)),
+                    at(world_xy(plane, a.center)),
                     a.radius * s,
-                    a.start_angle + turn,
-                    a.end_angle + turn,
+                    start + turn,
+                    end + turn,
                 ),
                 inside: false,
             }
         }
-        Entity::LwPolyline(pl) | Entity::Polyline2D(pl) if !in_world_plane(pl.extrusion) => {
-            Where::NotSearched(NotSearchedReason::NonSimilarPlacement)
-        }
         Entity::LwPolyline(pl) | Entity::Polyline2D(pl) => {
-            // TODO(bulge): arc segments are still measured as their chords.
-            let vertices: Vec<Point2D> = pl.vertices.iter().map(|v| at(v.point)).collect();
-            match distance_to_polyline(p, &vertices, pl.closed) {
+            let Some(plane) = flat_plane(pl.extrusion) else {
+                return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
+            };
+            let has_arcs = pl.vertices.iter().any(|v| v.bulge != 0.0);
+            if has_arcs && scale.is_none() {
+                return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
+            }
+            // Each vertex taken to the world and through the placement. A
+            // bulge's sign is its arc's turning direction, which a mirror
+            // copy's plane reverses and a similarity keeps.
+            let turning = plane.z_axis().z.signum();
+            let placed: Vec<PolylineVertex> = pl
+                .vertices
+                .iter()
+                .map(|v| PolylineVertex {
+                    point: at(world_xy(
+                        plane,
+                        Point3D {
+                            x: v.point.x,
+                            y: v.point.y,
+                            z: pl.elevation,
+                        },
+                    )),
+                    bulge: v.bulge * turning,
+                })
+                .collect();
+            let segments: Vec<Segment> = bulge::segments(&placed, pl.closed).collect();
+            match distance_to_segments(p, &segments) {
                 Some(distance) => Where::Geometry {
                     distance,
-                    inside: pl.closed && polygon_contains(p, &vertices),
+                    inside: pl.closed && shape_contains(p, &segments),
                 },
                 None => Where::Unsupported,
             }

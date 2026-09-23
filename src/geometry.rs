@@ -1,7 +1,8 @@
 //! Plain 2D geometry on the model's points: distances a hit-test needs.
 //! Everything is on `f64` as computed, with no rounding.
 
-use uncad_model::{Point2D, Point3D};
+use uncad_model::bulge::Segment;
+use uncad_model::{BulgeArc, Point2D, Point3D};
 
 pub(crate) fn xy(p: Point3D) -> Point2D {
     Point2D { x: p.x, y: p.y }
@@ -28,30 +29,59 @@ pub(crate) fn distance_to_segment(p: Point2D, a: Point2D, b: Point2D) -> f64 {
     )
 }
 
-/// Distance from `p` to a polyline through `vertices`, closed or open.
-/// `None` for fewer than two vertices.
-pub(crate) fn distance_to_polyline(p: Point2D, vertices: &[Point2D], closed: bool) -> Option<f64> {
-    if vertices.len() < 2 {
-        return None;
+/// Distance from `p` to a polyline's segments, each straight or the arc
+/// its bulge describes. `None` when there are no segments (fewer than two
+/// vertices).
+pub(crate) fn distance_to_segments(p: Point2D, segments: &[Segment]) -> Option<f64> {
+    segments
+        .iter()
+        .map(|s| match &s.arc {
+            Some(arc) => distance_to_bulge_arc(p, s.from, s.to, arc),
+            None => distance_to_segment(p, s.from, s.to),
+        })
+        .reduce(f64::min)
+}
+
+/// Distance from `p` to the arc of a bulged segment from `from` to `to`.
+fn distance_to_bulge_arc(p: Point2D, from: Point2D, to: Point2D, arc: &BulgeArc) -> f64 {
+    let angle = (p.y - arc.center.y).atan2(p.x - arc.center.x);
+    if arc.contains_angle(angle) {
+        return (distance(p, arc.center) - arc.radius).abs();
     }
-    let mut best = f64::INFINITY;
-    for pair in vertices.windows(2) {
-        best = best.min(distance_to_segment(p, pair[0], pair[1]));
+    distance(p, from).min(distance(p, to))
+}
+
+/// Whether `p` is inside the closed shape a polyline's segments bound
+/// (even-odd rule), arcs included: the polygon through the segments' ends,
+/// with each arc's cap -- the region between its chord and the arc -- added
+/// or cut away. A point on the boundary may fall either way; a hit-test
+/// reports such a point as a boundary hit anyway.
+pub(crate) fn shape_contains(p: Point2D, segments: &[Segment]) -> bool {
+    let corners: Vec<Point2D> = segments.iter().map(|s| s.from).collect();
+    let mut inside = polygon_contains(p, &corners);
+    for s in segments {
+        if let Some(arc) = &s.arc {
+            if in_cap(p, s.from, s.to, arc) {
+                inside = !inside;
+            }
+        }
     }
-    if closed {
-        best = best.min(distance_to_segment(
-            p,
-            vertices[vertices.len() - 1],
-            vertices[0],
-        ));
-    }
-    Some(best)
+    inside
+}
+
+/// Whether `p` is strictly inside the cap of an arc: within its circle and
+/// on the arc's side of its chord. A cap is the minor or the major part of
+/// the disk as the arc is shorter or longer than a half turn.
+fn in_cap(p: Point2D, from: Point2D, to: Point2D, arc: &BulgeArc) -> bool {
+    let side = |q: Point2D| (to.x - from.x) * (q.y - from.y) - (to.y - from.y) * (q.x - from.x);
+    let middle = arc.at(arc.start_angle + arc.sweep / 2.0);
+    distance(p, arc.center) < arc.radius && side(p) * side(middle) > 0.0
 }
 
 /// Whether `p` is inside the polygon through `vertices` (even-odd rule). A
 /// point on the boundary may fall either way; a hit-test reports such a
 /// point as a boundary hit anyway.
-pub(crate) fn polygon_contains(p: Point2D, vertices: &[Point2D]) -> bool {
+fn polygon_contains(p: Point2D, vertices: &[Point2D]) -> bool {
     if vertices.len() < 3 {
         return false;
     }
@@ -107,6 +137,7 @@ fn angle_within(angle: f64, start: f64, end: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uncad_model::PolylineVertex;
 
     fn p(x: f64, y: f64) -> Point2D {
         Point2D { x, y }
@@ -128,16 +159,75 @@ mod tests {
         );
     }
 
+    fn segs(vertices: &[(f64, f64, f64)], closed: bool) -> Vec<Segment> {
+        let v: Vec<PolylineVertex> = vertices
+            .iter()
+            .map(|&(x, y, bulge)| PolylineVertex {
+                point: p(x, y),
+                bulge,
+            })
+            .collect();
+        uncad_model::bulge::segments(&v, closed).collect()
+    }
+
     #[test]
     fn a_closed_polyline_has_a_closing_edge_and_an_inside() {
-        let square = [p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0), p(0.0, 10.0)];
-        assert_eq!(distance_to_polyline(p(-1.0, 5.0), &square, true), Some(1.0));
+        let square = [
+            (0.0, 0.0, 0.0),
+            (10.0, 0.0, 0.0),
+            (10.0, 10.0, 0.0),
+            (0.0, 10.0, 0.0),
+        ];
+        let closed = segs(&square, true);
+        assert_eq!(distance_to_segments(p(-1.0, 5.0), &closed), Some(1.0));
         assert_eq!(
-            distance_to_polyline(p(-1.0, 5.0), &square, false),
+            distance_to_segments(p(-1.0, 5.0), &segs(&square, false)),
             Some(1.0f64.hypot(5.0))
         );
-        assert!(polygon_contains(p(5.0, 5.0), &square));
-        assert!(!polygon_contains(p(15.0, 5.0), &square));
+        assert!(shape_contains(p(5.0, 5.0), &closed));
+        assert!(!shape_contains(p(15.0, 5.0), &closed));
+        assert_eq!(
+            distance_to_segments(p(0.0, 0.0), &segs(&square[..1], true)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_bulged_segment_is_measured_along_its_arc_not_its_chord() {
+        // (0,0) -> (2,0) with bulge 1: the half circle below, through (1,-1).
+        let half = segs(&[(0.0, 0.0, 1.0), (2.0, 0.0, 0.0)], false);
+        let d = distance_to_segments(p(1.0, -1.0), &half).unwrap();
+        assert!(d.abs() < 1e-12, "{d}");
+        // Straight above the chord the nearest arc point is an end.
+        let d = distance_to_segments(p(1.0, 1.0), &half).unwrap();
+        assert!((d - 2f64.sqrt()).abs() < 1e-12, "{d}");
+    }
+
+    #[test]
+    fn a_circle_drawn_as_two_bulged_segments_encloses_its_middle() {
+        // Two half circles, (0,0) -> (2,0) -> back: a full circle of radius 1
+        // about (1,0), whose corner polygon has no area at all.
+        let circle = segs(&[(0.0, 0.0, 1.0), (2.0, 0.0, 1.0)], true);
+        assert!(shape_contains(p(1.0, 0.5), &circle));
+        assert!(shape_contains(p(1.0, -0.5), &circle));
+        assert!(!shape_contains(p(1.0, 1.5), &circle));
+    }
+
+    #[test]
+    fn a_bulge_that_bows_inward_cuts_its_cap_out_of_the_polygon() {
+        // A 10 x 10 square whose bottom edge bows up into it (bulge -1 from
+        // (0,0) to (10,0) runs clockwise, above the chord).
+        let bitten = segs(
+            &[
+                (0.0, 0.0, -1.0),
+                (10.0, 0.0, 0.0),
+                (10.0, 10.0, 0.0),
+                (0.0, 10.0, 0.0),
+            ],
+            true,
+        );
+        assert!(!shape_contains(p(5.0, 2.0), &bitten), "inside the bite");
+        assert!(shape_contains(p(5.0, 8.0), &bitten));
     }
 
     #[test]
