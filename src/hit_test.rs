@@ -162,7 +162,8 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             }
         }
         Entity::LwPolyline(pl) | Entity::Polyline2D(pl) => {
-            let vertices: Vec<Point2D> = pl.vertices.iter().map(|v| at(*v)).collect();
+            // TODO(bulge): arc segments are still measured as their chords.
+            let vertices: Vec<Point2D> = pl.vertices.iter().map(|v| at(v.point)).collect();
             match distance_to_polyline(p, &vertices, pl.closed) {
                 Some(distance) => Where::Geometry {
                     distance,
