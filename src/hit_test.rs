@@ -20,7 +20,7 @@ use crate::geometry::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uncad_model::bulge::{self, Segment};
-use uncad_model::model::{Confidence, Entity, EntityId, Ref, TextHorizontalAlignment};
+use uncad_model::model::{Confidence, Entity, EntityId, HorizontalJustification, Ref};
 use uncad_model::{Affine2, CadDatabase, Ocs, Point2D, Point3D, PolylineVertex};
 
 /// How deep block references may nest before the search stops following
@@ -175,7 +175,7 @@ fn text_anchor_distance(
     t: &Affine2,
     start: Point2D,
     alignment_point: Option<Point2D>,
-    horizontal: TextHorizontalAlignment,
+    horizontal: HorizontalJustification,
 ) -> f64 {
     let start = t.apply(start);
     match alignment_point.map(|a| t.apply(a)) {
@@ -183,7 +183,7 @@ fn text_anchor_distance(
         Some(end)
             if matches!(
                 horizontal,
-                TextHorizontalAlignment::Aligned | TextHorizontalAlignment::Fit
+                HorizontalJustification::Aligned | HorizontalJustification::Fit
             ) =>
         {
             distance_to_segment(p, start, end)
@@ -276,6 +276,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
                         },
                     )),
                     bulge: v.bulge * turning,
+                    ..*v
                 })
                 .collect();
             let segments: Vec<Segment> = bulge::segments(&placed, pl.closed).collect();
@@ -297,7 +298,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
                 &t,
                 e.start_point,
                 e.alignment_point,
-                e.horizontal_alignment,
+                e.horizontal_justification,
             )),
             None => Where::NotSearched(NotSearchedReason::NonSimilarPlacement),
         },
@@ -307,7 +308,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
                 &t,
                 a.start_point,
                 a.alignment_point,
-                a.horizontal_alignment,
+                a.horizontal_justification,
             )),
             None => Where::NotSearched(NotSearchedReason::NonSimilarPlacement),
         },
@@ -316,7 +317,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             t,
             a.start_point,
             a.alignment_point,
-            a.horizontal_alignment,
+            a.horizontal_justification,
         )),
         Entity::Insert(i) => Where::Anchor(distance(p, at(xy(i.insertion_point)))),
         _ => Where::Unsupported,

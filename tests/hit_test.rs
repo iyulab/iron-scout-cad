@@ -571,8 +571,8 @@ fn an_aligned_text_is_found_anywhere_along_its_baseline() {
             if t.text == "PLATE" {
                 t.start_point = p(0.0, 0.0);
                 t.alignment_point = Some(p(10.0, 0.0));
-                t.horizontal_alignment = uncad_model::model::TextHorizontalAlignment::Aligned;
-                t.vertical_alignment = uncad_model::model::TextVerticalAlignment::Baseline;
+                t.horizontal_justification = uncad_model::model::HorizontalJustification::Aligned;
+                t.vertical_justification = uncad_model::model::VerticalJustification::Baseline;
             }
         }
     }

@@ -165,6 +165,7 @@ mod tests {
             .map(|&(x, y, bulge)| PolylineVertex {
                 point: p(x, y),
                 bulge,
+                ..PolylineVertex::default()
             })
             .collect();
         uncad_model::bulge::segments(&v, closed).collect()
