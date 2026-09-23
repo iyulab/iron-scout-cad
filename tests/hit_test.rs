@@ -501,3 +501,36 @@ fn a_circle_on_a_tilted_plane_is_not_searched_and_says_why() {
         r.not_searched
     );
 }
+
+#[test]
+fn a_centered_caption_is_found_at_the_point_it_is_centered_on() {
+    // G7's caption is centered on (140, -67); the start point the file
+    // states, (128.8, -68.75), is where the writing program computed it to
+    // begin. Pointing at the middle of the text finds it.
+    let r = hit_test(&g7(), p(140.0, -67.0), 0.5);
+    let caption: Vec<&Hit> = r.hits.iter().filter(|h| h.entity_type == "TEXT").collect();
+    assert_eq!(caption.len(), 1, "{:?}", r.hits);
+    assert!(caption[0].anchored);
+    assert_eq!(caption[0].distance, 0.0);
+}
+
+#[test]
+fn an_aligned_text_is_found_anywhere_along_its_baseline() {
+    // A text aligned from (0, 0) to (10, 0) runs along that baseline:
+    // pointing at its middle, far from both ends, still finds it.
+    let mut db = g7();
+    for e in &mut db.entities {
+        if let Entity::Text(t) = e {
+            if t.text == "PLATE" {
+                t.start_point = p(0.0, 0.0);
+                t.alignment_point = Some(p(10.0, 0.0));
+                t.horizontal_alignment = uncad_model::model::TextHorizontalAlignment::Aligned;
+                t.vertical_alignment = uncad_model::model::TextVerticalAlignment::Baseline;
+            }
+        }
+    }
+    let r = hit_test(&db, p(5.0, 0.3), 0.5);
+    let found: Vec<&Hit> = r.hits.iter().filter(|h| h.entity_type == "TEXT").collect();
+    assert_eq!(found.len(), 1, "{:?}", r.hits);
+    assert!((found[0].distance - 0.3).abs() < 1e-12, "{:?}", found[0]);
+}

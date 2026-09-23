@@ -14,11 +14,13 @@
 //! places in the drawing. What could not be searched is said so, with the
 //! reason.
 
-use crate::geometry::{distance, distance_to_arc, distance_to_segments, shape_contains, xy};
+use crate::geometry::{
+    distance, distance_to_arc, distance_to_segment, distance_to_segments, shape_contains, xy,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uncad_model::bulge::{self, Segment};
-use uncad_model::model::{Confidence, Entity, EntityId, Ref};
+use uncad_model::model::{Confidence, Entity, EntityId, Ref, TextHorizontalAlignment};
 use uncad_model::{Affine2, CadDatabase, Ocs, Point2D, Point3D, PolylineVertex};
 
 /// How deep block references may nest before the search stops following
@@ -41,10 +43,13 @@ pub struct Hit {
     /// Distance from the point to the entity's geometry, in the drawing's
     /// own units; `0` when the point is on it. For an entity whose extent
     /// the model does not carry (text, a block reference) this is the
-    /// distance to its anchor point, and `anchored` says so.
+    /// distance to its anchor, and `anchored` says so: a block reference's
+    /// insertion point; a text's start point, or, for a text aligned on an
+    /// alignment point, the nearer of the two -- and for aligned or fit text,
+    /// which runs from one to the other, the baseline between them.
     pub distance: f64,
-    /// `true` when `distance` is to an anchor point rather than to the
-    /// entity's drawn geometry.
+    /// `true` when `distance` is to an anchor rather than to the entity's
+    /// drawn geometry.
     pub anchored: bool,
     pub confidence: Confidence,
     /// `true` when the drawing hides what was hit: the entity is marked
@@ -153,10 +158,38 @@ enum Where {
         distance: f64,
         inside: bool,
     },
-    /// Distance to an anchor point (the model carries no extent).
+    /// Distance to an anchor (the model carries no extent).
     Anchor(f64),
     Unsupported,
     NotSearched(NotSearchedReason),
+}
+
+/// Distance from `p` to where a line of text is anchored, placed through
+/// `t`. Aligned or fit text runs from its start point to its alignment
+/// point, so its anchor is the baseline between them. Any other aligned text
+/// answers to its alignment point, while its start point is where the
+/// writing program computed it to begin -- both are where the text is, and
+/// the nearer counts. Text with no alignment point has its start point.
+fn text_anchor_distance(
+    p: Point2D,
+    t: &Affine2,
+    start: Point2D,
+    alignment_point: Option<Point2D>,
+    horizontal: TextHorizontalAlignment,
+) -> f64 {
+    let start = t.apply(start);
+    match alignment_point.map(|a| t.apply(a)) {
+        None => distance(p, start),
+        Some(end)
+            if matches!(
+                horizontal,
+                TextHorizontalAlignment::Aligned | TextHorizontalAlignment::Fit
+            ) =>
+        {
+            distance_to_segment(p, start, end)
+        }
+        Some(point) => distance(p, start).min(distance(p, point)),
+    }
 }
 
 /// Measures `entity`, placed through `t`, against `p`. `scale` is the
@@ -251,9 +284,27 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             distance: distance(p, at(xy(pt.position))),
             inside: false,
         },
-        Entity::Text(e) => Where::Anchor(distance(p, at(e.start_point))),
-        Entity::Attrib(a) => Where::Anchor(distance(p, at(a.start_point))),
-        Entity::Attdef(a) => Where::Anchor(distance(p, at(a.start_point))),
+        Entity::Text(e) => Where::Anchor(text_anchor_distance(
+            p,
+            t,
+            e.start_point,
+            e.alignment_point,
+            e.horizontal_alignment,
+        )),
+        Entity::Attrib(a) => Where::Anchor(text_anchor_distance(
+            p,
+            t,
+            a.start_point,
+            a.alignment_point,
+            a.horizontal_alignment,
+        )),
+        Entity::Attdef(a) => Where::Anchor(text_anchor_distance(
+            p,
+            t,
+            a.start_point,
+            a.alignment_point,
+            a.horizontal_alignment,
+        )),
         Entity::Insert(i) => Where::Anchor(distance(p, at(xy(i.insertion_point)))),
         _ => Where::Unsupported,
     }
