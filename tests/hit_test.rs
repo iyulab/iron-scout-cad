@@ -291,6 +291,11 @@ fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
         },
         rotation: 0.0,
         attribs: Vec::new(),
+        extrusion: Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     });
     let mut db = CadDatabase {
         entities: vec![insert],
@@ -368,6 +373,11 @@ fn a_block_that_references_itself_ends_with_the_depth_reported() {
             },
             rotation: 0.0,
             attribs: Vec::new(),
+            extrusion: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
         })
     };
     let mut db = CadDatabase {
@@ -476,6 +486,43 @@ fn a_mirror_copied_polyline_arc_is_measured_along_the_arc() {
     let sag = 0.5 * 50f64.sqrt() / 2.0 / 2f64.sqrt();
     let r = hit_test(&g7(), p(142.5 - sag, -55.5 + sag), 1e-9);
     assert!(types_hit(&r).contains(&"LWPOLYLINE"), "{:?}", r.hits);
+}
+
+#[test]
+fn a_mirror_copied_block_is_hit_where_it_is_drawn() {
+    // G7's mirror copy of a block: its line (0, 0)-(8, 0), placed at
+    // (-175, -66) turned 30 degrees in a system whose x is the world's -x,
+    // is drawn from (175, -66) to (175 - 8 cos 30, -66 + 8 sin 30).
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let mid = p(175.0 - 4.0 * cos, -66.0 + 4.0 * sin);
+    let r = hit_test(&g7(), mid, 1e-6);
+    assert!(types_hit(&r).contains(&"LINE"), "{:?}", r.hits);
+    assert!(r.not_searched.is_empty(), "{:?}", r.not_searched);
+    // Its unmirrored place, reflected across x = 175, is empty.
+    let r = hit_test(&g7(), p(175.0 + 4.0 * cos, -66.0 + 4.0 * sin), 0.5);
+    assert!(!types_hit(&r).contains(&"LINE"), "{:?}", r.hits);
+}
+
+#[test]
+fn a_block_on_a_tilted_plane_is_not_searched_and_says_why() {
+    let mut db = g7();
+    for e in &mut db.entities {
+        if let Entity::Insert(i) = e {
+            i.extrusion = uncad_model::Point3D {
+                x: 1.0,
+                y: 0.0,
+                z: 1.0,
+            };
+        }
+    }
+    let r = hit_test(&db, p(175.0, -66.0), 0.5);
+    assert!(
+        r.not_searched.iter().any(
+            |n| n.entity_type == "INSERT" && n.reason == NotSearchedReason::NonSimilarPlacement
+        ),
+        "{:?}",
+        r.not_searched
+    );
 }
 
 #[test]

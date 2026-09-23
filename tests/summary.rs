@@ -135,15 +135,15 @@ fn the_summary_serializes_with_the_lookup_in_the_models_convention() {
     assert_eq!(json, r#"{"type":"ABSENT"}"#);
 }
 
-/// G7 with a second text drawn exactly on top of one of its values, under a
-/// fresh reference ID.
-fn g7_with_a_text_over(target_id: u64, text: &str) -> CadDatabase {
+/// G7 with a second text drawn exactly on top of its value `target`, under
+/// a fresh reference ID.
+fn g7_with_a_text_over(target: &str, text: &str) -> CadDatabase {
     let mut db = g7();
     let twin = db
         .entities
         .iter()
         .find_map(|e| match e {
-            Entity::Text(t) if t.common.id == EntityId::new(target_id) => Some(t.clone()),
+            Entity::Text(t) if t.text == target => Some(t.clone()),
             _ => None,
         })
         .expect("G7 has that text");
@@ -156,9 +156,9 @@ fn g7_with_a_text_over(target_id: u64, text: &str) -> CadDatabase {
 
 #[test]
 fn two_texts_at_the_same_nearest_distance_are_both_listed_and_the_lookup_is_ambiguous() {
-    // The value of "DWG NO" in G7 is the text with ID 262; a different text
-    // drawn on top of it is just as near, and neither is picked.
-    let s = summarize(&g7_with_a_text_over(262, "BP-2077"));
+    // The value of "DWG NO" in G7 is "BP-1042"; a different text drawn on
+    // top of it is just as near, and neither is picked.
+    let s = summarize(&g7_with_a_text_over("BP-1042", "BP-2077"));
     let dwg_no: Vec<&str> = s
         .labelled_texts
         .iter()
@@ -180,7 +180,7 @@ fn two_texts_at_the_same_nearest_distance_are_both_listed_and_the_lookup_is_ambi
 
 #[test]
 fn the_same_text_drawn_twice_is_still_one_value() {
-    let s = summarize(&g7_with_a_text_over(262, "BP-1042"));
+    let s = summarize(&g7_with_a_text_over("BP-1042", "BP-1042"));
     assert_eq!(s.labelled("DWG NO"), Lookup::Unique("BP-1042"));
     assert_eq!(
         s.labelled_texts

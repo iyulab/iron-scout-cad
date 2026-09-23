@@ -81,9 +81,9 @@ pub enum NotSearchedReason {
     /// composed block placement is not a similarity (it scales the axes
     /// differently, or mirrors) for a circle, an arc or a polyline with arc
     /// segments -- a circle would be drawn as an ellipse -- or the circle,
-    /// arc or polyline is written on a plane tilted out of the world's (a
-    /// plane facing up or down, a mirror copy's included, is measured). This
-    /// crate does not guess where it is drawn.
+    /// arc, polyline or block reference is written on a plane tilted out of
+    /// the world's (a plane facing up or down, a mirror copy's included, is
+    /// measured). This crate does not guess where it is drawn.
     NonSimilarPlacement,
     /// Block references nest deeper than the search follows.
     NestingTooDeep,
@@ -411,8 +411,15 @@ impl Search<'_> {
                 .push(not(NotSearchedReason::BlockReferenceBudgetExhausted));
             return;
         }
+        // A block placed in a plane tilted out of the world's has no exact
+        // 2D placement, so its contents are not measured -- and said so.
+        let Some(own) = insert.world_transform() else {
+            self.not_searched
+                .push(not(NotSearchedReason::NonSimilarPlacement));
+            return;
+        };
         self.followed += 1;
-        let placed = insert.transform().then(t);
+        let placed = own.then(t);
         let hides = usize::from(insert.common.invisible);
         self.hidden_refs += hides;
         via.push(insert.common.id);
