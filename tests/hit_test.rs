@@ -383,3 +383,40 @@ fn a_block_that_references_itself_ends_with_the_depth_reported() {
         .any(|n| n.reason == NotSearchedReason::NestingTooDeep));
     assert!(r.hits.len() > 1 && r.hits.len() < 100, "{}", r.hits.len());
 }
+
+#[test]
+fn a_hidden_entity_is_still_hit_and_says_it_is_hidden() {
+    // G2's line three block references deep, drawn at (110, 100)-(110, 120).
+    let at = Point2D { x: 110.0, y: 110.0 };
+    let db = g2();
+    let shown = hit_test(&db, at, 0.5);
+    assert!(!shown.hits[0].invisible, "nothing in G2 is hidden");
+
+    // The line itself hidden: still hit, marked.
+    let mut hidden_line = g2();
+    for block in hidden_line.tables.block_records.values_mut() {
+        for e in &mut block.entities {
+            if let Entity::Line(l) = e {
+                l.common.invisible = true;
+            }
+        }
+    }
+    let r = hit_test(&hidden_line, at, 0.5);
+    assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+    assert!(r.hits[0].invisible);
+
+    // Only the outermost block reference hidden: everything it draws is.
+    let mut hidden_ref = g2();
+    let outer = shown.hits[0].via[0];
+    for e in &mut hidden_ref.entities {
+        if e.common().id == outer {
+            if let Entity::Insert(i) = e {
+                i.common.invisible = true;
+            }
+        }
+    }
+    let r = hit_test(&hidden_ref, at, 0.5);
+    assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+    assert!(r.hits[0].invisible, "hidden through its reference");
+    assert_eq!(r.hits[0].via, shown.hits[0].via);
+}

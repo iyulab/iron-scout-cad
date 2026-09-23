@@ -46,6 +46,13 @@ pub struct Hit {
     /// entity's drawn geometry.
     pub anchored: bool,
     pub confidence: Confidence,
+    /// `true` when the drawing hides what was hit: the entity is marked
+    /// invisible (DXF 60), or a block reference it was reached through is --
+    /// a hidden reference hides everything it draws. The entity is still
+    /// reported, since the file does contain it there; whether a hidden
+    /// entity counts is the caller's decision.
+    #[serde(default)]
+    pub invisible: bool,
     /// The block references the entity was reached through, outermost
     /// first: empty for an entity of the drawing's own space, one ID per
     /// INSERT for an entity of a block definition. The entity's geometry
@@ -194,6 +201,9 @@ struct Search<'a> {
     not_searched: Vec<NotSearched>,
     /// Block references followed so far, across every level.
     followed: usize,
+    /// How many of the block references on the current path are marked
+    /// invisible.
+    hidden_refs: usize,
 }
 
 impl Search<'_> {
@@ -201,12 +211,14 @@ impl Search<'_> {
         let scale = t.similarity_scale();
         for entity in entities {
             let common = entity.common();
+            let invisible = common.invisible || self.hidden_refs > 0;
             let hit = |distance: f64, anchored: bool| Hit {
                 id: common.id,
                 entity_type: entity.type_name().to_string(),
                 distance,
                 anchored,
                 confidence: common.confidence,
+                invisible,
                 via: via.clone(),
             };
             match locate(entity, self.point, t, scale) {
@@ -282,9 +294,12 @@ impl Search<'_> {
         }
         self.followed += 1;
         let placed = insert.transform().then(t);
+        let hides = usize::from(insert.common.invisible);
+        self.hidden_refs += hides;
         via.push(insert.common.id);
         self.entities(&block.entities, &placed, via);
         via.pop();
+        self.hidden_refs -= hides;
     }
 }
 
@@ -302,6 +317,7 @@ pub fn hit_test(db: &CadDatabase, point: Point2D, tolerance: f64) -> HitTest {
         unsupported: BTreeSet::new(),
         not_searched: Vec::new(),
         followed: 0,
+        hidden_refs: 0,
     };
     search.entities(&db.entities, &Affine2::IDENTITY, &mut Vec::new());
     let Search {
