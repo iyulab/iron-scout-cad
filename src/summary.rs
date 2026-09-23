@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uncad_model::model::{Confidence, Entity, EntityId, Ref};
-use uncad_model::CadDatabase;
+use uncad_model::{CadDatabase, Ocs, Point2D};
 
 /// A layer and how much of the drawing is on it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -208,37 +208,41 @@ fn is_space(name: &str) -> bool {
 /// not listed; a text may be the value of one label and the label of the
 /// next, which is what a row of three reads as. Several texts at the same
 /// nearest distance are all listed (by ID) -- a tie is not broken by
-/// picking one.
+/// picking one. Positions are the world's: a text written in a mirror
+/// copy's plane is where it is drawn, and one on a plane tilted out of the
+/// world's is not paired, since no 2D position places it exactly.
 fn labelled_texts(db: &CadDatabase) -> Vec<LabelledText> {
     let texts: Vec<_> = db
         .entities
         .iter()
         .filter_map(|e| match e {
-            Entity::Text(t) => Some(t),
+            Entity::Text(t) => {
+                let at = Ocs::of(t.extrusion)?.flat_map()?.apply(t.start_point);
+                Some((t, at))
+            }
             _ => None,
         })
         .collect();
     let mut pairs = Vec::new();
-    for label in &texts {
-        let same_row = |t: &&uncad_model::model::TextEntity| {
-            (t.start_point.y - label.start_point.y).abs()
-                <= label.text_height.max(t.text_height) / 2.0
-                && t.start_point.x > label.start_point.x
+    for &(label, here) in &texts {
+        let same_row = |(t, at): &&(&uncad_model::model::TextEntity, Point2D)| {
+            (at.y - here.y).abs() <= label.text_height.max(t.text_height) / 2.0 && at.x > here.x
         };
         let candidates: Vec<_> = texts
             .iter()
-            .filter(|t| t.common.id != label.common.id && same_row(t))
+            .filter(|c| c.0.common.id != label.common.id && same_row(c))
             .collect();
         let Some(nearest) = candidates
             .iter()
-            .map(|t| t.start_point.x - label.start_point.x)
+            .map(|(_, at)| at.x - here.x)
             .min_by(f64::total_cmp)
         else {
             continue;
         };
         let mut values: Vec<_> = candidates
             .into_iter()
-            .filter(|t| t.start_point.x - label.start_point.x == nearest)
+            .filter(|(_, at)| at.x - here.x == nearest)
+            .map(|(t, _)| *t)
             .collect();
         values.sort_by_key(|t| t.common.id);
         for value in values {

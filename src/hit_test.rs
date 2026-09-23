@@ -81,7 +81,7 @@ pub enum NotSearchedReason {
     /// composed block placement is not a similarity (it scales the axes
     /// differently, or mirrors) for a circle, an arc or a polyline with arc
     /// segments -- a circle would be drawn as an ellipse -- or the circle,
-    /// arc, polyline or block reference is written on a plane tilted out of
+    /// arc, polyline, text or block reference is written on a plane tilted out of
     /// the world's (a plane facing up or down, a mirror copy's included, is
     /// measured). This crate does not guess where it is drawn.
     NonSimilarPlacement,
@@ -192,6 +192,13 @@ fn text_anchor_distance(
     }
 }
 
+/// `t` preceded by the map from the plane `extrusion` names to the world's
+/// XY -- `None` when that plane is tilted out of the world's (or names no
+/// plane), where no 2D map places a point of it exactly.
+fn in_plane(extrusion: Point3D, t: &Affine2) -> Option<Affine2> {
+    Some(Ocs::of(extrusion)?.flat_map()?.then(t))
+}
+
 /// Measures `entity`, placed through `t`, against `p`. `scale` is the
 /// similarity scale of `t` when it has one.
 fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where {
@@ -284,20 +291,26 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             distance: distance(p, at(xy(pt.position))),
             inside: false,
         },
-        Entity::Text(e) => Where::Anchor(text_anchor_distance(
-            p,
-            t,
-            e.start_point,
-            e.alignment_point,
-            e.horizontal_alignment,
-        )),
-        Entity::Attrib(a) => Where::Anchor(text_anchor_distance(
-            p,
-            t,
-            a.start_point,
-            a.alignment_point,
-            a.horizontal_alignment,
-        )),
+        Entity::Text(e) => match in_plane(e.extrusion, t) {
+            Some(t) => Where::Anchor(text_anchor_distance(
+                p,
+                &t,
+                e.start_point,
+                e.alignment_point,
+                e.horizontal_alignment,
+            )),
+            None => Where::NotSearched(NotSearchedReason::NonSimilarPlacement),
+        },
+        Entity::Attrib(a) => match in_plane(a.extrusion, t) {
+            Some(t) => Where::Anchor(text_anchor_distance(
+                p,
+                &t,
+                a.start_point,
+                a.alignment_point,
+                a.horizontal_alignment,
+            )),
+            None => Where::NotSearched(NotSearchedReason::NonSimilarPlacement),
+        },
         Entity::Attdef(a) => Where::Anchor(text_anchor_distance(
             p,
             t,

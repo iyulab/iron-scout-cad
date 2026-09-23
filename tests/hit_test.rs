@@ -581,3 +581,13 @@ fn an_aligned_text_is_found_anywhere_along_its_baseline() {
     assert_eq!(found.len(), 1, "{:?}", r.hits);
     assert!((found[0].distance - 0.3).abs() < 1e-12, "{:?}", found[0]);
 }
+
+#[test]
+fn a_mirror_copied_text_is_found_where_it_is_drawn() {
+    // G7's mirror copy of a text: written at (-170, -72) with extrusion
+    // (0, 0, -1), anchored at (170, -72) in the world.
+    let r = hit_test(&g7(), p(170.0, -72.0), 0.1);
+    assert!(types_hit(&r).contains(&"TEXT"), "{:?}", r.hits);
+    let r = hit_test(&g7(), p(-170.0, -72.0), 0.1);
+    assert!(!types_hit(&r).contains(&"TEXT"), "{:?}", r.hits);
+}
