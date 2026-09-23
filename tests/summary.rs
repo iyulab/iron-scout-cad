@@ -191,3 +191,23 @@ fn the_same_text_drawn_twice_is_still_one_value() {
         "both carriers are listed; the value is one"
     );
 }
+
+#[test]
+fn labels_are_matched_and_values_returned_as_the_file_wrote_them() {
+    // The model carries text as the file wrote it, control codes included,
+    // and so does the summary: an underlined label and a diameter value are
+    // found by their codes, not by what they draw.
+    let mut db = g7();
+    for e in &mut db.entities {
+        if let Entity::Text(t) = e {
+            match t.text.as_str() {
+                "DWG NO" => t.text = "%%uDWG NO".to_string(),
+                "BP-1042" => t.text = "%%c32".to_string(),
+                _ => {}
+            }
+        }
+    }
+    let s = summarize(&db);
+    assert_eq!(s.labelled("%%uDWG NO"), Lookup::Unique("%%c32"));
+    assert_eq!(s.labelled("DWG NO"), Lookup::Absent);
+}
