@@ -60,6 +60,6 @@ The crate is in 0.x. When a more correct design is found, a breaking change is t
 |---|---|---|
 | Tests · bug fixes and refactors that leave the public API unchanged · docs | Public API changes · new dependencies · **new verbs** · changing the meaning of, or removing, an entity-model field | Anything that adds inference · anything in "What it is not" · copyleft dependencies · changes to the provenance/confidence contract, including new confidence values |
 
-Adding an entity type or field is fine without prior discussion; mention it in the change description. If it is unclear which column a change falls in, treat it as the stricter one.
+Adding an entity type or field, or a field to a result the library returns, is fine without prior discussion; mention it in the change description. If it is unclear which column a change falls in, treat it as the stricter one.
 
 Tests for things the library **must not do** — dropping an entity silently, raising a confidence, modifying its input — are required, and their failure count is always zero.
