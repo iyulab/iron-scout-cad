@@ -261,6 +261,10 @@ fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
         color_index: 256,
         true_color: None,
         invisible: false,
+        linetype: uncad_model::model::EntityLinetype::ByLayer,
+        linetype_scale: 1.0,
+        lineweight: Some(-1),
+        transparency: Some(0),
     };
     let circle = Entity::Circle(CircleEntity {
         common: common(1),
@@ -356,6 +360,10 @@ fn a_block_that_references_itself_ends_with_the_depth_reported() {
         color_index: 256,
         true_color: None,
         invisible: false,
+        linetype: uncad_model::model::EntityLinetype::ByLayer,
+        linetype_scale: 1.0,
+        lineweight: Some(-1),
+        transparency: Some(0),
     };
     let refer = |id: u64| {
         Entity::Insert(InsertEntity {
