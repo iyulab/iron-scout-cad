@@ -193,10 +193,11 @@ fn the_same_text_drawn_twice_is_still_one_value() {
 }
 
 #[test]
-fn labels_are_matched_and_values_returned_as_the_file_wrote_them() {
-    // The model carries text as the file wrote it, control codes included,
-    // and so does the summary: an underlined label and a diameter value are
-    // found by their codes, not by what they draw.
+fn labels_are_matched_and_values_returned_as_plain_text() {
+    // The model carries text with its codes in it. A label is found by what
+    // it reads, not by how it is written: an underlined label answers to its
+    // words, and a diameter value comes back as the sign it names -- with
+    // the text as written beside it.
     let mut db = g7();
     for e in &mut db.entities {
         if let Entity::Text(t) = e {
@@ -208,6 +209,23 @@ fn labels_are_matched_and_values_returned_as_the_file_wrote_them() {
         }
     }
     let s = summarize(&db);
-    assert_eq!(s.labelled("%%uDWG NO"), Lookup::Unique("%%c32"));
-    assert_eq!(s.labelled("DWG NO"), Lookup::Absent);
+    assert_eq!(s.labelled("DWG NO"), Lookup::Unique("\u{2300}32"));
+    assert_eq!(s.labelled("%%uDWG NO"), Lookup::Absent);
+    let pair = s
+        .labelled_texts
+        .iter()
+        .find(|l| l.label.plain == "DWG NO")
+        .expect("the pair");
+    assert_eq!(pair.label.text, "%%uDWG NO");
+    assert_eq!(pair.value.text, "%%c32");
+}
+
+#[test]
+fn plain_text_drops_the_codes_and_keeps_what_depends_on_the_font() {
+    use iron_scout_cad::plain_text;
+    assert_eq!(plain_text("%%uA%%u %%d%%p0.1"), "A \u{b0}\u{b1}0.1");
+    // Which character %%nnn draws depends on the font: kept as written.
+    assert_eq!(plain_text("90%%127"), "90%%127");
+    assert_eq!(plain_text("100%%%"), "100%");
+    assert_eq!(plain_text("plain"), "plain");
 }

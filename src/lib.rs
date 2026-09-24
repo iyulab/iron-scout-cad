@@ -23,7 +23,8 @@ mod summary;
 
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason};
 pub use summary::{
-    summarize, AttributeValue, BlockSummary, LabelledText, LayerSummary, Lookup, Summary, TextRef,
+    plain_text, summarize, AttributeValue, BlockSummary, LabelledText, LayerSummary, Lookup,
+    Summary, TextRef,
 };
 
 pub use uncad_model::CadDatabase;

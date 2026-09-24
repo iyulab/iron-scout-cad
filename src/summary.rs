@@ -36,7 +36,10 @@ pub struct AttributeValue {
     pub id: EntityId,
     /// The tag the value answers to (the block's ATTDEF tag).
     pub tag: String,
+    /// The value as the model carries it, its codes included.
     pub value: String,
+    /// The value as plain text (see [`plain_text`]).
+    pub plain: String,
     pub confidence: Confidence,
 }
 
@@ -44,7 +47,50 @@ pub struct AttributeValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextRef {
     pub id: EntityId,
+    /// The text as the model carries it, its codes included.
     pub text: String,
+    /// The text as plain text (see [`plain_text`]).
+    pub plain: String,
+}
+
+impl TextRef {
+    fn of(id: EntityId, text: &str) -> Self {
+        TextRef {
+            id,
+            text: text.to_string(),
+            plain: plain_text(text),
+        }
+    }
+}
+
+/// What a TEXT or ATTRIB reads as, without the codes it is written in: the
+/// characters, with `%%d`, `%%p` and `%%c` as the degree, plus-minus and
+/// diameter signs they name and underline and overline switches dropped.
+/// `%%nnn` stays as written -- which character it draws depends on the font.
+/// This is what labels are matched by and values returned as; the text as
+/// written stays beside it.
+pub fn plain_text(text: &str) -> String {
+    use uncad_model::text::{tokens, Special, TextKind, Token};
+    let mut out = String::with_capacity(text.len());
+    for token in tokens(text, TextKind::Line) {
+        match token {
+            Token::Char(c) => out.push(c),
+            Token::Special(Special::Degree) => out.push('\u{b0}'),
+            Token::Special(Special::PlusMinus) => out.push('\u{b1}'),
+            Token::Special(Special::Diameter) => out.push('\u{2300}'),
+            Token::CharCode(code) => out.push_str(&format!("%%{code:03}")),
+            Token::Unknown(raw) => out.push_str(raw),
+            Token::Break(_) | Token::NonBreakingSpace => out.push(' '),
+            Token::Stack { top, bottom, .. } => {
+                out.push_str(top);
+                out.push('/');
+                out.push_str(bottom);
+            }
+            Token::StackUnsplit(body) => out.push_str(body),
+            Token::Toggle(_) | Token::Property { .. } | Token::GroupStart | Token::GroupEnd => {}
+        }
+    }
+    out
 }
 
 /// Two loose TEXT entities that read as a label and its value: on the same
@@ -99,23 +145,25 @@ pub struct Summary {
 
 impl Summary {
     /// The value of the attribute `tag` across the drawing's block
-    /// references: one distinct value, none, or several (all listed).
+    /// references, as plain text: one distinct value, none, or several (all
+    /// listed).
     pub fn attribute(&self, tag: &str) -> Lookup<&str> {
         lookup(
             self.attributes
                 .iter()
                 .filter(|a| a.tag == tag)
-                .map(|a| a.value.as_str()),
+                .map(|a| a.plain.as_str()),
         )
     }
 
-    /// The value next to the loose text `label`, likewise.
+    /// The value next to the loose text that reads `label`, likewise: the
+    /// label is matched, and the value returned, as plain text.
     pub fn labelled(&self, label: &str) -> Lookup<&str> {
         lookup(
             self.labelled_texts
                 .iter()
-                .filter(|l| l.label.text == label)
-                .map(|l| l.value.text.as_str()),
+                .filter(|l| l.label.plain == label)
+                .map(|l| l.value.plain.as_str()),
         )
     }
 }
@@ -157,6 +205,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
                     id: a.common.id,
                     tag: a.tag.clone(),
                     value: a.text.clone(),
+                    plain: plain_text(&a.text),
                     confidence: a.common.confidence.min(insert.common.confidence),
                 });
             }
@@ -247,14 +296,8 @@ fn labelled_texts(db: &CadDatabase) -> Vec<LabelledText> {
         values.sort_by_key(|t| t.common.id);
         for value in values {
             pairs.push(LabelledText {
-                label: TextRef {
-                    id: label.common.id,
-                    text: label.text.clone(),
-                },
-                value: TextRef {
-                    id: value.common.id,
-                    text: value.text.clone(),
-                },
+                label: TextRef::of(label.common.id, &label.text),
+                value: TextRef::of(value.common.id, &value.text),
                 confidence: label.common.confidence.min(value.common.confidence),
             });
         }
