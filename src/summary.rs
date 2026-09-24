@@ -136,6 +136,15 @@ pub struct Summary {
     /// Loose TEXT pairs that read as label and value, by the label's
     /// reference ID.
     pub labelled_texts: Vec<LabelledText>,
+    /// Loose TEXTs left out of that pairing because they are written on a
+    /// plane tilted out of the world's: where they are drawn in plan is not
+    /// something this crate measures, so they are neither labels nor values
+    /// here -- and are listed, by reference ID, so that a label missing
+    /// from [`Self::labelled_texts`] is never silently "not in the
+    /// drawing". A plane facing up or down (a mirror copy's included) is
+    /// measured and paired.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unplaced_texts: Vec<TextRef>,
     /// The lowest confidence of any entity summarized; `High` for a drawing
     /// with no entities.
     pub confidence: Confidence,
@@ -235,13 +244,15 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         })
         .collect();
 
+    let (labelled_texts, unplaced_texts) = labelled_texts(db);
     Summary {
         entity_count: db.entities.len(),
         by_type,
         layers,
         blocks,
         attributes,
-        labelled_texts: labelled_texts(db),
+        labelled_texts,
+        unplaced_texts,
         confidence,
         warnings: db.read_diagnostics.warnings.clone(),
     }
@@ -260,18 +271,19 @@ fn is_space(name: &str) -> bool {
 /// picking one. Positions are the world's: a text written in a mirror
 /// copy's plane is where it is drawn, and one on a plane tilted out of the
 /// world's is not paired, since no 2D position places it exactly.
-fn labelled_texts(db: &CadDatabase) -> Vec<LabelledText> {
-    let texts: Vec<_> = db
-        .entities
-        .iter()
-        .filter_map(|e| match e {
-            Entity::Text(t) => {
-                let at = Ocs::of(t.extrusion)?.flat_map()?.apply(t.start_point);
-                Some((t, at))
-            }
-            _ => None,
-        })
-        .collect();
+/// The label-value pairs among the loose texts, and the loose texts that
+/// could not take part because their plane is tilted.
+fn labelled_texts(db: &CadDatabase) -> (Vec<LabelledText>, Vec<TextRef>) {
+    let mut texts = Vec::new();
+    let mut unplaced = Vec::new();
+    for e in &db.entities {
+        let Entity::Text(t) = e else { continue };
+        match Ocs::of(t.extrusion).and_then(|o| o.flat_map()) {
+            Some(plan) => texts.push((t, plan.apply(t.start_point))),
+            None => unplaced.push(TextRef::of(t.common.id, &t.text)),
+        }
+    }
+    unplaced.sort_by_key(|t| t.id);
     let mut pairs = Vec::new();
     for &(label, here) in &texts {
         let same_row = |(t, at): &&(&uncad_model::model::TextEntity, Point2D)| {
@@ -303,5 +315,5 @@ fn labelled_texts(db: &CadDatabase) -> Vec<LabelledText> {
         }
     }
     pairs.sort_by_key(|l| (l.label.id, l.value.id));
-    pairs
+    (pairs, unplaced)
 }

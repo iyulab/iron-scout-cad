@@ -179,6 +179,35 @@ fn two_texts_at_the_same_nearest_distance_are_both_listed_and_the_lookup_is_ambi
 }
 
 #[test]
+fn a_text_on_a_tilted_plane_is_listed_as_unplaced_not_paired() {
+    // G7 has none: its mirror copy faces down, which is measured.
+    assert!(summarize(&g7()).unplaced_texts.is_empty());
+    let mut db = g7();
+    let mut tilted = None;
+    for e in &mut db.entities {
+        if let Entity::Text(t) = e {
+            if t.text == "BP-1042" {
+                t.extrusion = uncad_model::Point3D {
+                    x: 1.0,
+                    y: 0.0,
+                    z: 0.0,
+                };
+                tilted = Some(t.common.id);
+            }
+        }
+    }
+    let s = summarize(&db);
+    let ids: Vec<EntityId> = s.unplaced_texts.iter().map(|t| t.id).collect();
+    assert_eq!(ids, [tilted.expect("G7 has the value")]);
+    assert_eq!(s.unplaced_texts[0].plain, "BP-1042");
+    // It is no longer the label's value; the label has none left on its row.
+    assert!(s
+        .labelled_texts
+        .iter()
+        .all(|l| l.value.text != "BP-1042" && l.label.text != "BP-1042"));
+}
+
+#[test]
 fn the_same_text_drawn_twice_is_still_one_value() {
     let s = summarize(&g7_with_a_text_over("BP-1042", "BP-1042"));
     assert_eq!(s.labelled("DWG NO"), Lookup::Unique("BP-1042"));
