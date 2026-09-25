@@ -81,6 +81,57 @@ fn an_arc_reaches_as_far_as_its_sweep_not_its_circle() {
 }
 
 #[test]
+fn an_elliptical_arc_reaches_as_far_as_its_sweep() {
+    // Semi-axes 10 and 5, turned a quarter so the major axis runs along y;
+    // the half from parameter 0 to pi runs from (0, 10) over (-5, 0) to
+    // (0, -10).
+    let el = entity(
+        "ELLIPSE",
+        1,
+        json!({
+            "center": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "major_axis_endpoint": {"x": 0.0, "y": 10.0, "z": 0.0},
+            "axis_ratio": 0.5, "start_angle": 0.0, "end_angle": std::f64::consts::PI,
+            "extrusion": {"x": 0.0, "y": 0.0, "z": 1.0}
+        }),
+    );
+    let e = only(&drawing(vec![("*Model_Space", vec![el])]));
+    let b = e.bounds.unwrap();
+    assert!(
+        (b.min.x + 5.0).abs() < 1e-12
+            && b.max.x.abs() < 1e-12
+            && (b.min.y + 10.0).abs() < 1e-12
+            && (b.max.y - 10.0).abs() < 1e-12,
+        "{b:?}"
+    );
+    assert!(e.not_measured.is_empty(), "{e:?}");
+}
+
+#[test]
+fn a_spline_is_held_by_its_control_points() {
+    let s = entity(
+        "SPLINE",
+        1,
+        json!({
+            "degree": 2, "closed": false, "periodic": false,
+            "knots": [0.0, 0.0, 0.0, 1.0, 1.0, 1.0], "weights": [], "fit_points": [],
+            "control_points": [
+                {"x": 0.0, "y": 0.0, "z": 0.0},
+                {"x": 1.0, "y": 4.0, "z": 0.0},
+                {"x": 2.0, "y": 0.0, "z": 0.0}
+            ]
+        }),
+    );
+    let b = only(&drawing(vec![("*Model_Space", vec![s])]))
+        .bounds
+        .unwrap();
+    assert!(
+        close(b.min, p(0.0, 0.0)) && close(b.max, p(2.0, 4.0)),
+        "{b:?}"
+    );
+}
+
+#[test]
 fn a_mirror_copys_arc_is_where_it_is_drawn() {
     // Seen from below, the quarter from 0 to 90 degrees is drawn in the
     // world's second quadrant.

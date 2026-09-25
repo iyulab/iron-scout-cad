@@ -17,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+mod curve;
 mod extent;
 mod geometry;
 mod hit_test;

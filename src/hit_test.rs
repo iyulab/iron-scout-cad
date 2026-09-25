@@ -14,6 +14,7 @@
 //! places in the drawing. What could not be searched is said so, with the
 //! reason.
 
+use crate::curve::{self, Curve};
 use crate::geometry::{
     distance, distance_to_arc, distance_to_segment, distance_to_segments, flat_plane, in_plane,
     shape_contains, world_angle, world_xy, xy,
@@ -79,6 +80,14 @@ pub struct Hit {
     /// when the drawing lists no space block that holds the entity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
+    /// For a curve measured through chords (an ELLIPSE, a SPLINE): how far
+    /// the curve can be from the chords, so its true distance from the
+    /// point is `distance` give or take this much. The chords are cut
+    /// finely enough for this to be a thousandth of the tolerance, unless
+    /// the curve would need more chords than the search takes. Absent for
+    /// geometry measured exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<f64>,
 }
 
 /// Why an entity, or what a block reference draws, was not searched.
@@ -103,6 +112,17 @@ pub enum NotSearchedReason {
     NestingTooDeep,
     /// The search followed as many block references as it allows in one call.
     BlockReferenceBudgetExhausted,
+    /// The file does not define the curve to measure: a SPLINE stored only
+    /// by the points it passes through, or whose control points, knots and
+    /// weights do not make a curve; a LEADER whose path is a spline through
+    /// its vertices; an ELLIPSE whose normal names no plane. The program
+    /// that draws such a curve fits or picks one; this crate does not guess
+    /// which.
+    CurveUndefined,
+    /// A rational SPLINE -- its weights differ. Its points are known, but
+    /// this crate cannot bound how far the curve strays between them, so it
+    /// gives no distance rather than one it cannot vouch for.
+    CurveBoundUnknown,
 }
 
 /// An entity, or a block reference's contents, that the search did not
@@ -149,6 +169,12 @@ enum Where {
         distance: f64,
         inside: bool,
     },
+    /// Distance to chords of a curve, which stays within `within` of them.
+    Chords {
+        distance: f64,
+        inside: bool,
+        within: f64,
+    },
     /// Distance to an anchor (the model carries no extent).
     Anchor(f64),
     Unsupported,
@@ -184,8 +210,9 @@ fn text_anchor_distance(
 }
 
 /// Measures `entity`, placed through `t`, against `p`. `scale` is the
-/// similarity scale of `t` when it has one.
-fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where {
+/// similarity scale of `t` when it has one; `tolerance` is how finely a
+/// curve is cut into chords.
+fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, tolerance: f64) -> Where {
     let at = |q| t.apply(q);
     match entity {
         Entity::Line(l) => Where::Geometry {
@@ -355,6 +382,16 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             let vertices: Vec<Point2D> = l.vertices.iter().map(|&v| at(xy(v))).collect();
             outline(p, &vertices, false)
         }
+        Entity::Leader(l) if l.path_type == Some(LeaderPath::Spline) => {
+            Where::NotSearched(NotSearchedReason::CurveUndefined)
+        }
+        // Seen from above, as a LINE is: the curve's points are world
+        // coordinates, so a tilted plane needs no plane of its own here.
+        Entity::Ellipse(el) => {
+            let full = curve::ellipse_sweep(el) == std::f64::consts::TAU;
+            chords(p, curve::ellipse(el, t, tolerance), full)
+        }
+        Entity::Spline(s) => chords(p, curve::spline(s, t, tolerance), false),
         Entity::MultiLeader(m) if m.lines.iter().any(|line| line.len() >= 2) => {
             let distance = m
                 .lines
@@ -368,6 +405,23 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             }
         }
         _ => Where::Unsupported,
+    }
+}
+
+/// A curve's chords as a [`Where`]: a closed one encloses what lies inside
+/// it.
+fn chords(p: Point2D, curve: Curve, closed: bool) -> Where {
+    match curve {
+        Curve::Chords(c) => match outline(p, &c.points, closed) {
+            Where::Geometry { distance, inside } => Where::Chords {
+                distance,
+                inside,
+                within: c.within,
+            },
+            other => other,
+        },
+        Curve::Undefined => Where::NotSearched(NotSearchedReason::CurveUndefined),
+        Curve::BoundUnknown => Where::NotSearched(NotSearchedReason::CurveBoundUnknown),
     }
 }
 
@@ -424,7 +478,7 @@ impl Search<'_> {
             let common = entity.common();
             let invisible = common.invisible || self.hidden_refs > 0;
             let space = self.space_of(common.id, via);
-            let hit = |distance: f64, anchored: bool| Hit {
+            let hit = |distance: f64, anchored: bool, within: Option<f64>| Hit {
                 id: common.id,
                 entity_type: entity.type_name().to_string(),
                 distance,
@@ -433,22 +487,34 @@ impl Search<'_> {
                 invisible,
                 via: via.clone(),
                 space: space.clone(),
+                within,
             };
             let place = match entity {
                 Entity::Dimension(d) => self.locate_dimension(d, t, scale),
-                _ => locate(entity, self.point, t, scale),
+                _ => locate(entity, self.point, t, scale, self.tolerance),
             };
             match place {
                 Where::Geometry { distance, inside } => {
                     if distance <= self.tolerance {
-                        self.hits.push(hit(distance, false));
+                        self.hits.push(hit(distance, false, None));
                     } else if inside {
-                        self.enclosing.push(hit(distance, false));
+                        self.enclosing.push(hit(distance, false, None));
+                    }
+                }
+                Where::Chords {
+                    distance,
+                    inside,
+                    within,
+                } => {
+                    if distance <= self.tolerance {
+                        self.hits.push(hit(distance, false, Some(within)));
+                    } else if inside {
+                        self.enclosing.push(hit(distance, false, Some(within)));
                     }
                 }
                 Where::Anchor(distance) => {
                     if distance <= self.tolerance {
-                        self.hits.push(hit(distance, true));
+                        self.hits.push(hit(distance, true, None));
                     }
                 }
                 Where::Unsupported => {
@@ -481,11 +547,11 @@ impl Search<'_> {
             Ref::Resolved(name) => self.db.tables.block_records.get(name),
             _ => None,
         };
-        let text = (distance(self.point, at(d.text_midpoint)), true);
+        let text = (distance(self.point, at(d.text_midpoint)), true, None);
         let built_on = d
             .definition_point
-            .map(|q| (distance(self.point, at(xy(q))), true));
-        let nearer = |a: (f64, bool), b: (f64, bool)| {
+            .map(|q| (distance(self.point, at(xy(q))), true, None));
+        let nearer = |a: (f64, bool, Option<f64>), b: (f64, bool, Option<f64>)| {
             // At equal distance the drawn geometry wins, so a point on a line
             // is not reported as merely near an anchor.
             if b.0.total_cmp(&a.0).then(b.1.cmp(&a.1)).is_lt() {
@@ -497,19 +563,27 @@ impl Search<'_> {
         let nearest = drawn
             .into_iter()
             .flat_map(|block| &block.entities)
-            .filter_map(|e| match locate(e, self.point, t, scale) {
-                Where::Geometry { distance, .. } => Some((distance, false)),
-                Where::Anchor(distance) => Some((distance, true)),
+            .filter_map(|e| match locate(e, self.point, t, scale, self.tolerance) {
+                Where::Geometry { distance, .. } => Some((distance, false, None)),
+                Where::Chords {
+                    distance, within, ..
+                } => Some((distance, false, Some(within))),
+                Where::Anchor(distance) => Some((distance, true, None)),
                 Where::Unsupported | Where::NotSearched(_) => None,
             })
             .chain(built_on)
             .fold(text, nearer);
         match nearest {
-            (distance, false) => Where::Geometry {
+            (distance, false, Some(within)) => Where::Chords {
+                distance,
+                inside: false,
+                within,
+            },
+            (distance, false, None) => Where::Geometry {
                 distance,
                 inside: false,
             },
-            (distance, true) => Where::Anchor(distance),
+            (distance, true, _) => Where::Anchor(distance),
         }
     }
 

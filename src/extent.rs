@@ -19,13 +19,16 @@ pub struct Bounds {
 /// sheet -- each has coordinates of its own, so they are never mixed.
 ///
 /// The box holds every point this crate measures an entity by, in world
-/// coordinates: a line's ends, a circle's or an arc's reach in x and y
-/// (exactly, its sweep considered), a polyline's vertices and the reach of its
-/// arc segments, a text's anchor, a block reference's insertion point, a
+/// coordinates: a line's ends, a circle's, an arc's or an ellipse's reach in
+/// x and y (exactly, its sweep considered), a polyline's vertices and the
+/// reach of its arc segments, a spline's control points (whose box holds the
+/// curve) or, for one stored only by the points it passes through, those
+/// points, a text's anchor, a block reference's insertion point, a
 /// dimension's text and the points it was built on, and the corners,
-/// boundaries and vertices of the rest, and a viewport's frame on its sheet. What a block reference draws, and a
-/// text's glyphs, can reach past it -- the model carries no extent for
-/// either. Entity types it takes no point from are named.
+/// boundaries and vertices of the rest, and a viewport's frame on its sheet.
+/// What a block reference draws, and a text's glyphs, can reach past it --
+/// the model carries no extent for either. Entity types it takes no point
+/// from are named.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpaceExtent {
     /// The space's block: `*Model_Space`, or a `*Paper_Space` sheet.
@@ -236,6 +239,33 @@ fn points_of(e: &Entity, out: &mut Vec<Point2D>) -> bool {
         }
         Entity::Face3D(f) => out.extend([f.corner1, f.corner2, f.corner3, f.corner4].map(xy)),
         Entity::Wipeout(w) => out.extend(w.boundary.iter().copied()),
+        Entity::Ellipse(el) => {
+            let Some(minor) = el.minor_axis() else {
+                return false;
+            };
+            // Its two ends, and wherever x or y turns within its sweep:
+            // x(t) = cx + Mx cos t + nx sin t is stationary at
+            // atan2(nx, Mx) and half a turn later; y likewise.
+            let (start, sweep) = (el.start_angle, crate::curve::ellipse_sweep(el));
+            let m = el.major_axis_endpoint;
+            let mut at = vec![start, start + sweep];
+            for base in [minor.x.atan2(m.x), minor.y.atan2(m.y)] {
+                for half_turn in [0.0, std::f64::consts::PI] {
+                    let offset = (base + half_turn - start).rem_euclid(std::f64::consts::TAU);
+                    if offset <= sweep {
+                        at.push(start + offset);
+                    }
+                }
+            }
+            out.extend(at.into_iter().filter_map(|t| el.point_at(t)).map(xy));
+        }
+        // A spline lies in the hull of its control points, so their box
+        // holds it. One stored only by the points it passes through gives
+        // those.
+        Entity::Spline(s) => match s.nurbs() {
+            Some(_) => out.extend(s.control_points.iter().map(|&c| xy(c))),
+            None => out.extend(s.fit_points.iter().map(|&c| xy(c))),
+        },
         Entity::Leader(l) => out.extend(l.vertices.iter().map(|&v| xy(v))),
         Entity::MultiLeader(m) => out.extend(m.lines.iter().flatten().map(|&v| xy(v))),
         _ => {}

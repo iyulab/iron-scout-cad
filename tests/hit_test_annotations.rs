@@ -2,7 +2,7 @@
 //! dimension whose block is missing), text blocks and feature control
 //! frames, filled and masked areas, faces, and leaders.
 
-use iron_scout_cad::hit_test;
+use iron_scout_cad::{hit_test, NotSearchedReason};
 use serde_json::{json, Value};
 use uncad_model::model::EntityId;
 use uncad_model::{CadDatabase, Point2D};
@@ -230,13 +230,23 @@ fn a_straight_leader_is_hit_along_its_segments() {
 }
 
 #[test]
-fn a_leader_that_is_not_known_to_run_straight_is_not_measured_as_if_it_did() {
-    for path_type in [json!("SPLINE"), Value::Null] {
-        let db = leader(path_type);
-        let r = hit_test(&db, p(15.0, 10.0), 1e-9);
-        assert!(r.hits.is_empty(), "{r:?}");
-        assert_eq!(r.unsupported, ["LEADER"]);
-    }
+fn a_leader_whose_path_the_file_does_not_state_is_not_measured() {
+    let db = leader(Value::Null);
+    let r = hit_test(&db, p(15.0, 10.0), 1e-9);
+    assert!(r.hits.is_empty(), "{r:?}");
+    assert_eq!(r.unsupported, ["LEADER"]);
+}
+
+#[test]
+fn a_spline_leader_is_not_measured_as_a_curve_the_file_does_not_store() {
+    // The file gives the vertices the spline passes through, not the curve
+    // between them.
+    let db = leader(json!("SPLINE"));
+    let r = hit_test(&db, p(15.0, 10.0), 1e-9);
+    assert!(r.hits.is_empty(), "{r:?}");
+    assert!(r.unsupported.is_empty(), "{r:?}");
+    assert_eq!(r.not_searched.len(), 1, "{r:?}");
+    assert_eq!(r.not_searched[0].reason, NotSearchedReason::CurveUndefined);
 }
 
 #[test]
