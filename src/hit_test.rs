@@ -20,7 +20,9 @@ use crate::geometry::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uncad_model::bulge::{self, Segment};
-use uncad_model::model::{Confidence, Entity, EntityId, HorizontalJustification, Ref};
+use uncad_model::model::{
+    Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderPath, Ref,
+};
 use uncad_model::{Affine2, CadDatabase, Ocs, Point2D, Point3D, PolylineVertex};
 
 /// How deep block references may nest before the search stops following
@@ -46,7 +48,10 @@ pub struct Hit {
     /// distance to its anchor, and `anchored` says so: a block reference's
     /// insertion point; a text's start point, or, for a text aligned on an
     /// alignment point, the nearer of the two -- and for aligned or fit text,
-    /// which runs from one to the other, the baseline between them.
+    /// which runs from one to the other, the baseline between them; a text
+    /// block's or a feature control frame's insertion point. A dimension's
+    /// distance is to the nearest of what its block draws, anchored when
+    /// that nearest is a text.
     pub distance: f64,
     /// `true` when `distance` is to an anchor rather than to the entity's
     /// drawn geometry.
@@ -320,7 +325,99 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>) -> Where
             a.horizontal_justification,
         )),
         Entity::Insert(i) => Where::Anchor(distance(p, at(xy(i.insertion_point)))),
+        // MTEXT and TOLERANCE carry their insertion point in world
+        // coordinates; the extent of what they draw depends on a font the
+        // model does not carry.
+        Entity::MText(m) => Where::Anchor(distance(p, at(xy(m.insertion_point)))),
+        Entity::Tolerance(f) => Where::Anchor(distance(p, at(xy(f.insertion_point)))),
+        Entity::Solid(s) | Entity::Trace(s) => {
+            let Some(plane) = flat_plane(s.extrusion) else {
+                return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
+            };
+            let corner = |c: Point2D| {
+                at(world_xy(
+                    plane,
+                    Point3D {
+                        x: c.x,
+                        y: c.y,
+                        z: s.elevation,
+                    },
+                ))
+            };
+            // Filled through its corners in 1-2-4-3 order.
+            outline(
+                p,
+                &[
+                    corner(s.corner1),
+                    corner(s.corner2),
+                    corner(s.corner4),
+                    corner(s.corner3),
+                ],
+                true,
+            )
+        }
+        Entity::Face3D(f) => {
+            // Only the edges the file draws; seen from above, as a LINE is.
+            let corners = [f.corner1, f.corner2, f.corner3, f.corner4].map(|c| at(xy(c)));
+            let distance = (0..4)
+                .filter(|&i| !f.invisible_edges[i])
+                .map(|i| distance_to_segment(p, corners[i], corners[(i + 1) % 4]))
+                .fold(f64::INFINITY, f64::min);
+            Where::Geometry {
+                distance,
+                inside: false,
+            }
+        }
+        Entity::Wipeout(w) => {
+            let boundary: Vec<Point2D> = w.boundary.iter().map(|&q| at(q)).collect();
+            outline(p, &boundary, true)
+        }
+        Entity::Leader(l) if l.path_type == Some(LeaderPath::Straight) => {
+            let vertices: Vec<Point2D> = l.vertices.iter().map(|&v| at(xy(v))).collect();
+            outline(p, &vertices, false)
+        }
+        Entity::MultiLeader(m) if m.lines.iter().any(|line| line.len() >= 2) => {
+            let distance = m
+                .lines
+                .iter()
+                .map(|line| line.iter().map(|&v| at(xy(v))).collect::<Vec<_>>())
+                .filter_map(|line| straight_distance(p, &line, false))
+                .fold(f64::INFINITY, f64::min);
+            Where::Geometry {
+                distance,
+                inside: false,
+            }
+        }
         _ => Where::Unsupported,
+    }
+}
+
+/// Distance from `p` to the straight segments through `points`, closing the
+/// last back to the first when `closed`; `None` for fewer than two points.
+fn straight_distance(p: Point2D, points: &[Point2D], closed: bool) -> Option<f64> {
+    let vertices: Vec<PolylineVertex> = points
+        .iter()
+        .map(|&q| PolylineVertex::straight(q))
+        .collect();
+    let segments: Vec<Segment> = bulge::segments(&vertices, closed).collect();
+    distance_to_segments(p, &segments)
+}
+
+/// The straight outline through `points` as a [`Where`]: a closed outline
+/// encloses what lies inside it. Fewer than two points draw nothing this
+/// crate can measure.
+fn outline(p: Point2D, points: &[Point2D], closed: bool) -> Where {
+    let vertices: Vec<PolylineVertex> = points
+        .iter()
+        .map(|&q| PolylineVertex::straight(q))
+        .collect();
+    let segments: Vec<Segment> = bulge::segments(&vertices, closed).collect();
+    match distance_to_segments(p, &segments) {
+        Some(distance) => Where::Geometry {
+            distance,
+            inside: closed && shape_contains(p, &segments),
+        },
+        None => Where::Unsupported,
     }
 }
 
@@ -354,7 +451,11 @@ impl Search<'_> {
                 invisible,
                 via: via.clone(),
             };
-            match locate(entity, self.point, t, scale) {
+            let place = match entity {
+                Entity::Dimension(d) => self.locate_dimension(d, t, scale),
+                _ => locate(entity, self.point, t, scale),
+            };
+            match place {
                 Where::Geometry { distance, inside } => {
                     if distance <= self.tolerance {
                         self.hits.push(hit(distance, false));
@@ -379,6 +480,44 @@ impl Search<'_> {
             }
             if let Entity::Insert(insert) = entity {
                 self.follow(insert, t, via);
+            }
+        }
+    }
+
+    /// A dimension is where it is drawn: the entities of its block, which
+    /// the file already places in world coordinates, measured through `t`
+    /// alone -- the nearest of them is the dimension's distance, and an
+    /// anchor when that nearest one is measured to its anchor. A dimension
+    /// whose block the drawing does not answer to, or which draws nothing
+    /// measurable, is measured to where its text sits and the point it was
+    /// built on.
+    fn locate_dimension(&self, d: &DimensionEntity, t: &Affine2, scale: Option<f64>) -> Where {
+        let drawn = match &d.block_name {
+            Ref::Resolved(name) => self.db.tables.block_records.get(name),
+            _ => None,
+        };
+        let nearest = drawn
+            .into_iter()
+            .flat_map(|block| &block.entities)
+            .filter_map(|e| match locate(e, self.point, t, scale) {
+                Where::Geometry { distance, .. } => Some((distance, false)),
+                Where::Anchor(distance) => Some((distance, true)),
+                Where::Unsupported | Where::NotSearched(_) => None,
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        match nearest {
+            Some((distance, false)) => Where::Geometry {
+                distance,
+                inside: false,
+            },
+            Some((distance, true)) => Where::Anchor(distance),
+            None => {
+                let at = |q| t.apply(q);
+                let text = distance(self.point, at(d.text_midpoint));
+                let built_on = d
+                    .definition_point
+                    .map_or(f64::INFINITY, |q| distance(self.point, at(xy(q))));
+                Where::Anchor(text.min(built_on))
             }
         }
     }

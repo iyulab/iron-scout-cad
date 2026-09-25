@@ -38,7 +38,10 @@ fn first_hole(db: &CadDatabase) -> EntityId {
 fn a_point_on_a_circles_edge_hits_it_at_distance_zero() {
     let db = g1();
     let result = hit_test(&db, p(25.0, 20.0), 1e-9);
-    assert_eq!(result.hits.len(), 1, "{:?}", result.hits);
+    // The hole's diameter dimension draws its line out to the same edge:
+    // two hits, by reference ID, neither preferred.
+    let types: Vec<&str> = result.hits.iter().map(|h| h.entity_type.as_str()).collect();
+    assert_eq!(types, ["CIRCLE", "DIMENSION"], "{:?}", result.hits);
     assert_eq!(result.hits[0].id, first_hole(&db));
     assert_eq!(result.hits[0].entity_type, "CIRCLE");
     assert_eq!(result.hits[0].distance, 0.0);
@@ -58,7 +61,12 @@ fn a_point_on_a_circles_edge_hits_it_at_distance_zero() {
 fn a_point_inside_a_hole_is_enclosed_by_it_not_on_it() {
     let db = g1();
     let result = hit_test(&db, p(20.0, 20.0), 0.5);
-    assert!(result.hits.is_empty(), "{:?}", result.hits);
+    // The hole itself is not hit -- but two dimensions draw through its
+    // centre: the diameter's line, and the hole-to-hole distance's
+    // extension line, which starts there.
+    let ids: Vec<u64> = result.hits.iter().map(|h| h.id.value()).collect();
+    assert_eq!(ids, [295, 296], "{:?}", result.hits);
+    assert!(result.hits.iter().all(|h| h.entity_type == "DIMENSION"));
     // Enclosed by the hole and by the outline around it, by reference ID
     // (the outline was written first).
     assert_eq!(result.enclosing.len(), 2, "{:?}", result.enclosing);
@@ -95,10 +103,12 @@ fn a_point_on_the_outline_is_inside_no_hole_and_on_the_outline() {
 }
 
 #[test]
-fn what_cannot_be_hit_tested_is_named_never_skipped_in_silence() {
+fn every_entity_type_of_the_general_part_is_searched() {
+    // A type this crate cannot search is named in `unsupported` (see the
+    // leader cases in `hit_test_annotations.rs`); the general part has none.
     let db = g1();
     let result = hit_test(&db, p(0.0, 0.0), 1e-9);
-    assert_eq!(result.unsupported, ["DIMENSION"]);
+    assert!(result.unsupported.is_empty(), "{:?}", result.unsupported);
 }
 
 #[test]
