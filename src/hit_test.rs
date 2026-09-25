@@ -15,7 +15,8 @@
 //! reason.
 
 use crate::geometry::{
-    distance, distance_to_arc, distance_to_segment, distance_to_segments, shape_contains, xy,
+    distance, distance_to_arc, distance_to_segment, distance_to_segments, flat_plane, in_plane,
+    shape_contains, world_angle, world_xy, xy,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -23,7 +24,7 @@ use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
     Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderPath, Ref,
 };
-use uncad_model::{Affine2, CadDatabase, Ocs, Point2D, Point3D, PolylineVertex};
+use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
 /// How deep block references may nest before the search stops following
 /// them. Real drawings nest a few levels; a definition that references
@@ -129,32 +130,6 @@ pub struct HitTest {
     pub not_searched: Vec<NotSearched>,
 }
 
-/// The coordinate system of an entity written in its own plane, when that
-/// plane is parallel to the world's -- facing up, or down as a mirror copy's
-/// does -- so that what is drawn there is seen from above undistorted.
-/// `None` for a tilted plane, or an extrusion that names none.
-fn flat_plane(extrusion: Point3D) -> Option<Ocs> {
-    Ocs::of(extrusion).filter(|o| o.is_flat())
-}
-
-/// A point of `plane` taken to the world, seen from above.
-fn world_xy(plane: Ocs, p: Point3D) -> Point2D {
-    xy(plane.to_world(p))
-}
-
-/// The world direction (radians) of the direction `angle` in `plane`.
-fn world_angle(plane: Ocs, angle: f64) -> f64 {
-    let d = world_xy(
-        plane,
-        Point3D {
-            x: angle.cos(),
-            y: angle.sin(),
-            z: 0.0,
-        },
-    );
-    d.y.atan2(d.x)
-}
-
 /// Where a point's geometry is, for one entity.
 enum Where {
     /// Distance to the drawn geometry, and whether the point is inside a
@@ -195,13 +170,6 @@ fn text_anchor_distance(
         }
         Some(point) => distance(p, start).min(distance(p, point)),
     }
-}
-
-/// `t` preceded by the map from the plane `extrusion` names to the world's
-/// XY -- `None` when that plane is tilted out of the world's (or names no
-/// plane), where no 2D map places a point of it exactly.
-fn in_plane(extrusion: Point3D, t: &Affine2) -> Option<Affine2> {
-    Some(Ocs::of(extrusion)?.flat_map()?.then(t))
 }
 
 /// Measures `entity`, placed through `t`, against `p`. `scale` is the

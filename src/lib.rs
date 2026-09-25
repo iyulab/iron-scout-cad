@@ -17,10 +17,12 @@
 
 #![forbid(unsafe_code)]
 
+mod extent;
 mod geometry;
 mod hit_test;
 mod summary;
 
+pub use extent::{Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason};
 pub use summary::{
     plain_text, summarize, AttributeValue, BlockSummary, DimensionSummary, LabelledText,

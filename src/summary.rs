@@ -1,5 +1,6 @@
 //! The summary: what a drawing contains, compactly, with nothing guessed.
 
+use crate::extent::SpaceExtent;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uncad_model::model::{Confidence, DimensionKind, Entity, EntityId, Ref, TextOverride};
@@ -176,6 +177,11 @@ pub struct Summary {
     /// Every dimension of the drawing's own spaces, by reference ID.
     #[serde(default)]
     pub dimensions: Vec<DimensionSummary>,
+    /// Where each space of the drawing is -- model space and every
+    /// paper-space sheet, by block name: a coordinate range to point into
+    /// (see [`SpaceExtent`]).
+    #[serde(default)]
+    pub extents: Vec<SpaceExtent>,
     /// The lowest confidence of any entity summarized; `High` for a drawing
     /// with no entities.
     pub confidence: Confidence,
@@ -302,6 +308,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         labelled_texts,
         unplaced_texts,
         dimensions,
+        extents: crate::extent::space_extents(db),
         confidence,
         warnings: db.read_diagnostics.warnings.clone(),
     }
