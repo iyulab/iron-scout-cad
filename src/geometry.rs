@@ -133,38 +133,27 @@ fn polygon_contains(p: Point2D, vertices: &[Point2D]) -> bool {
     inside
 }
 
-/// Distance from `p` to the arc of a circle at `center` with `radius` from
-/// `start` to `end` (radians, counter-clockwise, as the model stores them).
+/// Distance from `p` to the arc of a circle at `center` with `radius` that
+/// runs counter-clockwise from `start` by `sweep` (radians, within one turn
+/// -- see [`ArcEntity::sweep`](uncad_model::model::ArcEntity::sweep)).
 pub(crate) fn distance_to_arc(
     p: Point2D,
     center: Point2D,
     radius: f64,
     start: f64,
-    end: f64,
+    sweep: f64,
 ) -> f64 {
     let d = distance(p, center);
     let angle = (p.y - center.y).atan2(p.x - center.x);
-    if angle_within(angle, start, end) {
+    if (angle - start).rem_euclid(std::f64::consts::TAU) <= sweep {
         return (d - radius).abs();
     }
+    let end = start + sweep;
     let at = |a: f64| Point2D {
         x: center.x + radius * a.cos(),
         y: center.y + radius * a.sin(),
     };
     distance(p, at(start)).min(distance(p, at(end)))
-}
-
-/// Whether `angle` lies on the counter-clockwise sweep from `start` to `end`.
-fn angle_within(angle: f64, start: f64, end: f64) -> bool {
-    let tau = std::f64::consts::TAU;
-    let norm = |a: f64| a.rem_euclid(tau);
-    let sweep = norm(end - start);
-    let offset = norm(angle - start);
-    if sweep == 0.0 {
-        // A full circle, as some writers store it.
-        return true;
-    }
-    offset <= sweep
 }
 
 #[cfg(test)]

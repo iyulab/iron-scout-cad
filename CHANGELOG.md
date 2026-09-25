@@ -44,6 +44,11 @@ bumps the minor version.
 
 ### Fixed
 
+- An ARC whose start and end angles are equal is no longer taken for the whole circle. The
+  format does not say whether such an arc is the whole circle or nothing, so it is left out of
+  the extent (`not_measured`) and a point on its circle is answered with `CURVE_UNDEFINED`.
+  Arc and ellipse sweeps and an ellipse's turning points now come from `uncad-model`, the same
+  arithmetic every consumer of the model uses.
 - A circle, arc or polyline written in its own plane is measured where it is drawn: a mirror
   copy through the model's coordinate system, and one on a tilted plane is listed as not
   searched rather than measured where it is not drawn.

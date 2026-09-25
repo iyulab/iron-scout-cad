@@ -120,20 +120,15 @@ fn points_of(e: &Entity, out: &mut Vec<Point2D>) -> bool {
             if let Some(plane) = flat_plane(a.extrusion) {
                 // Seen from below (a mirror copy's plane) the arc runs
                 // clockwise in the world, from its own end to its own start.
-                let (start, end) = (
-                    world_angle(plane, a.start_angle),
-                    world_angle(plane, a.end_angle),
-                );
-                let (start, end) = if plane.z_axis().z < 0.0 {
-                    (end, start)
-                } else {
-                    (start, end)
+                // An arc whose angles are equal has no sweep: the file does
+                // not say whether it is the whole circle or nothing.
+                let Some(sweep) = a.sweep() else {
+                    return false;
                 };
-                let sweep = (end - start).rem_euclid(std::f64::consts::TAU);
-                let sweep = if sweep == 0.0 {
-                    std::f64::consts::TAU
+                let start = if plane.z_axis().z < 0.0 {
+                    world_angle(plane, a.end_angle)
                 } else {
-                    sweep
+                    world_angle(plane, a.start_angle)
                 };
                 arc_reach(
                     &BulgeArc {
@@ -240,24 +235,13 @@ fn points_of(e: &Entity, out: &mut Vec<Point2D>) -> bool {
         Entity::Face3D(f) => out.extend([f.corner1, f.corner2, f.corner3, f.corner4].map(xy)),
         Entity::Wipeout(w) => out.extend(w.boundary.iter().copied()),
         Entity::Ellipse(el) => {
-            let Some(minor) = el.minor_axis() else {
+            // Its two ends, and wherever x or y turns within its sweep.
+            let Some(turns) = el.extremes() else {
                 return false;
             };
-            // Its two ends, and wherever x or y turns within its sweep:
-            // x(t) = cx + Mx cos t + nx sin t is stationary at
-            // atan2(nx, Mx) and half a turn later; y likewise.
-            let (start, sweep) = (el.start_angle, crate::curve::ellipse_sweep(el));
-            let m = el.major_axis_endpoint;
-            let mut at = vec![start, start + sweep];
-            for base in [minor.x.atan2(m.x), minor.y.atan2(m.y)] {
-                for half_turn in [0.0, std::f64::consts::PI] {
-                    let offset = (base + half_turn - start).rem_euclid(std::f64::consts::TAU);
-                    if offset <= sweep {
-                        at.push(start + offset);
-                    }
-                }
-            }
-            out.extend(at.into_iter().filter_map(|t| el.point_at(t)).map(xy));
+            let ends = [el.start_angle, el.start_angle + el.sweep()];
+            out.extend(ends.into_iter().filter_map(|t| el.point_at(t)).map(xy));
+            out.extend(turns.into_iter().map(xy));
         }
         // A spline lies in the hull of its control points, so their box
         // holds it. One stored only by the points it passes through gives

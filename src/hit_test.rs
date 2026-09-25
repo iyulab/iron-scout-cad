@@ -115,7 +115,9 @@ pub enum NotSearchedReason {
     /// The file does not define the curve to measure: a SPLINE stored only
     /// by the points it passes through, or whose control points, knots and
     /// weights do not make a curve; a LEADER whose path is a spline through
-    /// its vertices; an ELLIPSE whose normal names no plane. The program
+    /// its vertices; an ELLIPSE whose normal names no plane; an ARC whose
+    /// start and end angles are equal, which the format leaves as either the
+    /// whole circle or nothing ([`ArcEntity::sweep`](uncad_model::model::ArcEntity::sweep)). The program
     /// that draws such a curve fits or picks one; this crate does not guess
     /// which.
     CurveUndefined,
@@ -238,17 +240,18 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
             let (Some(plane), Some(s)) = (flat_plane(a.extrusion), scale) else {
                 return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
             };
+            // An arc whose angles are equal has no sweep: the file does not
+            // say whether it is the whole circle or nothing.
+            let Some(sweep) = a.sweep() else {
+                return Where::NotSearched(NotSearchedReason::CurveUndefined);
+            };
             // Seen from below (a mirror copy's plane) the arc's own
             // counter-clockwise sweep runs clockwise in the world, so its
             // world start is where its own end is.
-            let (start, end) = (
-                world_angle(plane, a.start_angle),
-                world_angle(plane, a.end_angle),
-            );
-            let (start, end) = if plane.z_axis().z < 0.0 {
-                (end, start)
+            let start = if plane.z_axis().z < 0.0 {
+                world_angle(plane, a.end_angle)
             } else {
-                (start, end)
+                world_angle(plane, a.start_angle)
             };
             let turn = t.rotation();
             Where::Geometry {
@@ -257,7 +260,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
                     at(world_xy(plane, a.center)),
                     a.radius * s,
                     start + turn,
-                    end + turn,
+                    sweep,
                 ),
                 inside: false,
             }
@@ -388,7 +391,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
         // Seen from above, as a LINE is: the curve's points are world
         // coordinates, so a tilted plane needs no plane of its own here.
         Entity::Ellipse(el) => {
-            let full = curve::ellipse_sweep(el) == std::f64::consts::TAU;
+            let full = el.sweep() == std::f64::consts::TAU;
             chords(p, curve::ellipse(el, t, tolerance), full)
         }
         Entity::Spline(s) => chords(p, curve::spline(s, t, tolerance), false),

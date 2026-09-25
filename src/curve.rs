@@ -78,23 +78,6 @@ fn chords_for(h: f64, m: f64, target: f64) -> (usize, f64) {
     (count, m * step * step / 8.0)
 }
 
-/// The parameter range an ELLIPSE runs over: from `start_angle`, turning
-/// the difference to `end_angle` into one turn at most. Equal parameters
-/// (or a whole turn) are the whole ellipse.
-pub(crate) fn ellipse_sweep(el: &EllipseEntity) -> f64 {
-    let span = el.end_angle - el.start_angle;
-    let tau = std::f64::consts::TAU;
-    if span.abs() < 1e-12 || (span.abs() - tau).abs() < 1e-9 {
-        return tau;
-    }
-    let sweep = span.rem_euclid(tau);
-    if sweep < 1e-12 {
-        tau
-    } else {
-        sweep
-    }
-}
-
 /// An ELLIPSE placed through `t`, as chords good to `tolerance`.
 pub(crate) fn ellipse(el: &EllipseEntity, t: &Affine2, tolerance: f64) -> Curve {
     let Some(minor) = el.minor_axis() else {
@@ -102,7 +85,7 @@ pub(crate) fn ellipse(el: &EllipseEntity, t: &Affine2, tolerance: f64) -> Curve 
     };
     let stretch = stretch(t);
     let m = length(el.major_axis_endpoint).max(length(minor));
-    let sweep = ellipse_sweep(el);
+    let sweep = el.sweep();
     let (count, bound) = chords_for(sweep, m, tolerance * BOUND_PER_TOLERANCE / stretch);
     let points = (0..=count)
         .filter_map(|i| el.point_at(el.start_angle + sweep * (i as f64 / count as f64)))

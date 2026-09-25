@@ -231,3 +231,60 @@ fn a_hit_names_the_space_it_is_in_so_one_space_can_be_kept() {
         [(1, Some("*Model_Space")), (2, Some("*Paper_Space"))]
     );
 }
+
+fn arc_between(id: u64, start: f64, end: f64) -> Value {
+    entity(
+        "ARC",
+        id,
+        json!({
+            "center": {"x": 0.0, "y": 0.0, "z": 0.0}, "radius": 10.0,
+            "start_angle": start, "end_angle": end,
+            "extrusion": {"x": 0.0, "y": 0.0, "z": 1.0}
+        }),
+    )
+}
+
+#[test]
+fn an_arc_whose_angles_are_more_than_a_turn_apart_reaches_less_than_one() {
+    // 0 to 3 pi names the directions 0 to pi: the upper half.
+    let pi = std::f64::consts::PI;
+    let e = only(&drawing(vec![(
+        "*Model_Space",
+        vec![arc_between(1, 0.0, 3.0 * pi)],
+    )]));
+    let b = e.bounds.unwrap();
+    assert!(
+        close(b.min, p(-10.0, 0.0)) && close(b.max, p(10.0, 10.0)),
+        "{b:?}"
+    );
+}
+
+#[test]
+fn an_arc_whose_angles_are_equal_is_neither_measured_nor_pointed_at() {
+    // The format does not say whether it is the whole circle or nothing.
+    let db = drawing(vec![("*Model_Space", vec![arc_between(1, 1.0, 1.0)])]);
+    let e = only(&db);
+    assert_eq!(e.bounds, None, "{e:?}");
+    assert_eq!(e.not_measured, vec!["ARC".to_string()]);
+    // On the circle, where a whole circle would be hit.
+    let r = iron_scout_cad::hit_test(&db, p(0.0, -10.0), 1e-9);
+    assert!(r.hits.is_empty(), "{r:?}");
+    assert_eq!(r.not_searched.len(), 1, "{r:?}");
+    assert_eq!(
+        r.not_searched[0].reason,
+        iron_scout_cad::NotSearchedReason::CurveUndefined
+    );
+}
+
+#[test]
+fn an_arc_whose_angles_are_a_whole_turn_apart_is_the_whole_circle() {
+    let tau = std::f64::consts::TAU;
+    let db = drawing(vec![("*Model_Space", vec![arc_between(1, 0.0, tau)])]);
+    let b = only(&db).bounds.unwrap();
+    assert!(
+        close(b.min, p(-10.0, -10.0)) && close(b.max, p(10.0, 10.0)),
+        "{b:?}"
+    );
+    let r = iron_scout_cad::hit_test(&db, p(0.0, -10.0), 1e-9);
+    assert_eq!(r.hits.len(), 1, "{r:?}");
+}
