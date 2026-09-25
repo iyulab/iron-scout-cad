@@ -484,17 +484,31 @@ impl Search<'_> {
         }
     }
 
-    /// A dimension is where it is drawn: the entities of its block, which
-    /// the file already places in world coordinates, measured through `t`
-    /// alone -- the nearest of them is the dimension's distance, and an
-    /// anchor when that nearest one is measured to its anchor. A dimension
-    /// whose block the drawing does not answer to, or which draws nothing
-    /// measurable, is measured to where its text sits and the point it was
-    /// built on.
+    /// A dimension is where it is drawn and where the file says it is: the
+    /// entities of its block, which the file already places in world
+    /// coordinates, measured through `t` alone, and the middle of its text
+    /// (DXF 11) and the point it was built on (DXF 10), which the file states
+    /// beside the block. The nearest of these is the dimension's distance --
+    /// an anchor when it is one of the two stated points or a text of the
+    /// block.
     fn locate_dimension(&self, d: &DimensionEntity, t: &Affine2, scale: Option<f64>) -> Where {
+        let at = |q| t.apply(q);
         let drawn = match &d.block_name {
             Ref::Resolved(name) => self.db.tables.block_records.get(name),
             _ => None,
+        };
+        let text = (distance(self.point, at(d.text_midpoint)), true);
+        let built_on = d
+            .definition_point
+            .map(|q| (distance(self.point, at(xy(q))), true));
+        let nearer = |a: (f64, bool), b: (f64, bool)| {
+            // At equal distance the drawn geometry wins, so a point on a line
+            // is not reported as merely near an anchor.
+            if b.0.total_cmp(&a.0).then(b.1.cmp(&a.1)).is_lt() {
+                b
+            } else {
+                a
+            }
         };
         let nearest = drawn
             .into_iter()
@@ -504,21 +518,14 @@ impl Search<'_> {
                 Where::Anchor(distance) => Some((distance, true)),
                 Where::Unsupported | Where::NotSearched(_) => None,
             })
-            .min_by(|a, b| a.0.total_cmp(&b.0));
+            .chain(built_on)
+            .fold(text, nearer);
         match nearest {
-            Some((distance, false)) => Where::Geometry {
+            (distance, false) => Where::Geometry {
                 distance,
                 inside: false,
             },
-            Some((distance, true)) => Where::Anchor(distance),
-            None => {
-                let at = |q| t.apply(q);
-                let text = distance(self.point, at(d.text_midpoint));
-                let built_on = d
-                    .definition_point
-                    .map_or(f64::INFINITY, |q| distance(self.point, at(xy(q))));
-                Where::Anchor(text.min(built_on))
-            }
+            (distance, true) => Where::Anchor(distance),
         }
     }
 

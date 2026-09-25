@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use uncad_model::model::{Confidence, Entity, EntityId, Ref};
+use uncad_model::model::{Confidence, DimensionKind, Entity, EntityId, Ref, TextOverride};
 use uncad_model::{CadDatabase, Ocs, Point2D};
 
 /// A layer and how much of the drawing is on it.
@@ -93,6 +93,34 @@ pub fn plain_text(text: &str) -> String {
     out
 }
 
+/// A dimension, as the file states it: what it measures, the measurement
+/// it recorded, the text it shows, and where that text sits -- a point to
+/// hand [`crate::hit_test`] to point at it. Nothing here is recomputed from
+/// the dimension's points: the recorded measurement and the text are the
+/// file's, and where they disagree both are listed as written.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DimensionSummary {
+    pub id: EntityId,
+    /// What the dimension measures; `None` when the file does not state it.
+    pub kind: Option<DimensionKind>,
+    /// The measurement the drawing recorded (DXF 42), in the drawing's
+    /// units -- radians for an angular dimension; `None` when the file does
+    /// not carry it.
+    pub measurement: Option<f64>,
+    /// The text the dimension shows, as the model folds it: the
+    /// measurement, nothing, or a literal (which may stand `<>` for the
+    /// measurement inside a longer string).
+    pub text: TextOverride,
+    /// A literal text as plain text (see [`plain_text`]); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plain: Option<String>,
+    /// The middle of the dimension's text (DXF 11), where it is drawn.
+    pub text_midpoint: Point2D,
+    /// The DIMSTYLE the dimension names.
+    pub style: Ref<String>,
+    pub confidence: Confidence,
+}
+
 /// Two loose TEXT entities that read as a label and its value: on the same
 /// row, the value the nearest text to the right of the label. Nothing but
 /// position ties them, which is how a title block drawn without a block
@@ -145,6 +173,9 @@ pub struct Summary {
     /// measured and paired.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unplaced_texts: Vec<TextRef>,
+    /// Every dimension of the drawing's own spaces, by reference ID.
+    #[serde(default)]
+    pub dimensions: Vec<DimensionSummary>,
     /// The lowest confidence of any entity summarized; `High` for a drawing
     /// with no entities.
     pub confidence: Confidence,
@@ -196,6 +227,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
     let mut per_block: BTreeMap<&str, usize> = BTreeMap::new();
     let mut confidence = Confidence::High;
     let mut attributes = Vec::new();
+    let mut dimensions = Vec::new();
 
     for e in &db.entities {
         *by_type.entry(e.type_name().to_string()).or_insert(0) += 1;
@@ -203,6 +235,21 @@ pub fn summarize(db: &CadDatabase) -> Summary {
             *per_layer.entry(layer.as_str()).or_insert(0) += 1;
         }
         confidence = confidence.min(e.common().confidence);
+        if let Entity::Dimension(d) = e {
+            dimensions.push(DimensionSummary {
+                id: d.common.id,
+                kind: d.kind,
+                measurement: d.measurement,
+                plain: match &d.text_override {
+                    TextOverride::Literal(text) => Some(plain_text(text)),
+                    _ => None,
+                },
+                text: d.text_override.clone(),
+                text_midpoint: d.text_midpoint,
+                style: d.style_name.clone(),
+                confidence: d.common.confidence,
+            });
+        }
         if let Entity::Insert(insert) = e {
             if let Ref::Resolved(block) = &insert.block_name {
                 *per_block.entry(block.as_str()).or_insert(0) += 1;
@@ -221,6 +268,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         }
     }
     attributes.sort_by(|a, b| a.insert.cmp(&b.insert).then(a.id.cmp(&b.id)));
+    dimensions.sort_by_key(|d| d.id);
 
     let layers = db
         .tables
@@ -253,6 +301,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         attributes,
         labelled_texts,
         unplaced_texts,
+        dimensions,
         confidence,
         warnings: db.read_diagnostics.warnings.clone(),
     }

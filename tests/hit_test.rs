@@ -85,7 +85,10 @@ fn a_point_on_the_outline_is_inside_no_hole_and_on_the_outline() {
     let db = g1();
     let result = hit_test(&db, p(100.0, 0.0), 1e-9);
     let types: Vec<&str> = result.hits.iter().map(|h| h.entity_type.as_str()).collect();
-    assert_eq!(types, ["LWPOLYLINE"]);
+    // The overall width's dimension states the middle of its text there too,
+    // so it is a second hit -- at its anchor, not on its drawn lines.
+    assert_eq!(types, ["LWPOLYLINE", "DIMENSION"]);
+    assert!(!result.hits[0].anchored && result.hits[1].anchored);
     assert!(
         result.enclosing.is_empty(),
         "the outline is hit, not merely enclosing"

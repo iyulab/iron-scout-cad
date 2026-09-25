@@ -1,6 +1,7 @@
 //! The summary, checked on the golden cases whose specs are the oracle: a
 //! general part with a title block (G1), the same title block twice with
-//! two drawing numbers (G9), and a title block of loose texts (G7).
+//! two drawing numbers (G9), a title block of loose texts (G7), and a
+//! drawing that is mostly dimensions (G5).
 
 use iron_scout_cad::{summarize, Lookup};
 use uncad_model::model::{Confidence, Entity, EntityId, Ref};
@@ -257,4 +258,48 @@ fn plain_text_drops_the_codes_and_keeps_what_depends_on_the_font() {
     assert_eq!(plain_text("90%%127"), "90%%127");
     assert_eq!(plain_text("100%%%"), "100%");
     assert_eq!(plain_text("plain"), "plain");
+}
+
+fn g5() -> CadDatabase {
+    golden(include_str!("golden/g5.expected.json"))
+}
+
+#[test]
+fn every_dimension_is_listed_as_the_file_states_it() {
+    use uncad_model::model::{DimensionKind, TextOverride};
+    let s = summarize(&g5());
+    let ids: Vec<u64> = s.dimensions.iter().map(|d| d.id.value()).collect();
+    assert_eq!(ids, [298, 299, 300, 301, 302, 303, 304]);
+    let d = |id: u64| s.dimensions.iter().find(|d| d.id.value() == id).unwrap();
+    // A literal that disagrees with the recorded measurement: both, as
+    // written -- neither is corrected to the other.
+    assert_eq!(d(301).measurement, Some(120.0));
+    assert_eq!(d(301).text, TextOverride::Literal("125".into()));
+    assert_eq!(d(301).plain.as_deref(), Some("125"));
+    // A literal's codes read as plain text beside it.
+    assert_eq!(d(303).kind, Some(DimensionKind::Diameter));
+    assert_eq!(d(303).plain.as_deref(), Some("\u{2300}20"));
+    // A suppressed text, a missing measurement and an undeclared style are
+    // said, not filled in.
+    assert_eq!(d(300).text, TextOverride::Suppressed);
+    assert_eq!(d(300).plain, None);
+    assert_eq!(d(302).measurement, None);
+    assert_eq!(d(302).style, Ref::Unresolved("NOT-DECLARED".into()));
+}
+
+#[test]
+fn a_dimensions_text_midpoint_points_back_at_it() {
+    // The summary and the hit test close a loop: where the summary says a
+    // dimension's text is, pointing finds that dimension.
+    let db = g5();
+    for d in summarize(&db).dimensions {
+        let r = iron_scout_cad::hit_test(&db, d.text_midpoint, 1e-9);
+        assert!(
+            r.hits.iter().any(|h| h.id == d.id),
+            "{:?} not found at {:?}: {:?}",
+            d.id,
+            d.text_midpoint,
+            r.hits
+        );
+    }
 }
