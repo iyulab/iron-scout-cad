@@ -153,3 +153,29 @@ fn the_general_parts_extent_holds_every_hole_and_every_dimension() {
         assert!(b.min.x <= t.x && t.x <= b.max.x && b.min.y <= t.y && t.y <= b.max.y);
     }
 }
+
+#[test]
+fn a_hit_names_the_space_it_is_in_so_one_space_can_be_kept() {
+    let line = |id| {
+        entity(
+            "LINE",
+            id,
+            json!({"start_point": {"x": 0.0, "y": 0.0, "z": 0.0}, "end_point": {"x": 10.0, "y": 0.0, "z": 0.0}}),
+        )
+    };
+    let db = drawing(vec![
+        ("*Model_Space", vec![line(1)]),
+        ("*Paper_Space", vec![line(2)]),
+    ]);
+    // Both spaces have a line through (5, 0): both are hits, each named.
+    let r = iron_scout_cad::hit_test(&db, p(5.0, 0.0), 1e-9);
+    let spaces: Vec<(u64, Option<&str>)> = r
+        .hits
+        .iter()
+        .map(|h| (h.id.value(), h.space.as_deref()))
+        .collect();
+    assert_eq!(
+        spaces,
+        [(1, Some("*Model_Space")), (2, Some("*Paper_Space"))]
+    );
+}

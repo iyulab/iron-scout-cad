@@ -253,6 +253,7 @@ fn a_reference_to_no_block_is_reported_not_skipped() {
             entity_type: "INSERT".into(),
             via: vec![],
             reason: NotSearchedReason::BlockReferenceUnresolved,
+            space: Some("*Model_Space".into()),
         }]
     );
     // Far away: the reason is still reported -- it does not depend on the point.
@@ -356,6 +357,8 @@ fn a_circle_in_a_stretched_block_is_not_guessed_at() {
             entity_type: "CIRCLE".into(),
             via: vec![EntityId::new(2)],
             reason: NotSearchedReason::NonSimilarPlacement,
+            // This drawing lists no space block.
+            space: None,
         }]
     );
 }

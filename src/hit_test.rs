@@ -19,7 +19,7 @@ use crate::geometry::{
     shape_contains, world_angle, world_xy, xy,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
     Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderPath, Ref,
@@ -71,6 +71,14 @@ pub struct Hit {
     /// was placed through these INSERTs' transforms before measuring.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via: Vec<EntityId>,
+    /// The space the entity is drawn in -- `*Model_Space`, or a
+    /// `*Paper_Space` sheet, as the summary's extents name them -- for an
+    /// entity inside a block, the space of the outermost block reference.
+    /// Every space is searched at once, and each has coordinates of its own:
+    /// a caller pointing into one space keeps the hits of that space. Absent
+    /// when the drawing lists no space block that holds the entity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
 }
 
 /// Why an entity, or what a block reference draws, was not searched.
@@ -106,6 +114,9 @@ pub struct NotSearched {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via: Vec<EntityId>,
     pub reason: NotSearchedReason,
+    /// The space it is in, as [`Hit::space`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
 }
 
 /// What is at a point.
@@ -402,6 +413,8 @@ struct Search<'a> {
     /// How many of the block references on the current path are marked
     /// invisible.
     hidden_refs: usize,
+    /// The space block each entity of the drawing's own spaces is in.
+    spaces: BTreeMap<EntityId, &'a str>,
 }
 
 impl Search<'_> {
@@ -410,6 +423,7 @@ impl Search<'_> {
         for entity in entities {
             let common = entity.common();
             let invisible = common.invisible || self.hidden_refs > 0;
+            let space = self.space_of(common.id, via);
             let hit = |distance: f64, anchored: bool| Hit {
                 id: common.id,
                 entity_type: entity.type_name().to_string(),
@@ -418,6 +432,7 @@ impl Search<'_> {
                 confidence: common.confidence,
                 invisible,
                 via: via.clone(),
+                space: space.clone(),
             };
             let place = match entity {
                 Entity::Dimension(d) => self.locate_dimension(d, t, scale),
@@ -444,6 +459,7 @@ impl Search<'_> {
                     entity_type: entity.type_name().to_string(),
                     via: via.clone(),
                     reason,
+                    space: space.clone(),
                 }),
             }
             if let Entity::Insert(insert) = entity {
@@ -497,6 +513,13 @@ impl Search<'_> {
         }
     }
 
+    /// The space of the entity `id` reached through `via`: that of the
+    /// outermost block reference, or of the entity itself at the top level.
+    fn space_of(&self, id: EntityId, via: &[EntityId]) -> Option<String> {
+        let top = via.first().copied().unwrap_or(id);
+        self.spaces.get(&top).map(|s| s.to_string())
+    }
+
     /// Searches what `insert` draws: its block's entities, placed through
     /// the INSERT's own transform and then `t`.
     fn follow(
@@ -505,11 +528,13 @@ impl Search<'_> {
         t: &Affine2,
         via: &mut Vec<EntityId>,
     ) {
+        let space = self.space_of(insert.common.id, via);
         let not = |reason| NotSearched {
             id: insert.common.id,
             entity_type: "INSERT".to_string(),
             via: via.clone(),
             reason,
+            space: space.clone(),
         };
         let name = match &insert.block_name {
             Ref::Resolved(name) => name,
@@ -557,6 +582,28 @@ impl Search<'_> {
     }
 }
 
+/// The space block each entity of the drawing's own spaces is in: its own
+/// entities, and the attribute values of its block references, which the
+/// model lists at the top level beside them.
+fn spaces(db: &CadDatabase) -> BTreeMap<EntityId, &str> {
+    let mut out = BTreeMap::new();
+    for record in db.tables.block_records.values() {
+        let upper = record.name.to_ascii_uppercase();
+        if upper != "*MODEL_SPACE" && !upper.starts_with("*PAPER_SPACE") {
+            continue;
+        }
+        for e in &record.entities {
+            out.insert(e.common().id, record.name.as_str());
+            if let Entity::Insert(insert) = e {
+                for a in &insert.attribs {
+                    out.insert(a.common.id, record.name.as_str());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The entities at `point`, within `tolerance`: the drawing's own space,
 /// and what its block references draw, placed where they are drawn.
 ///
@@ -572,6 +619,7 @@ pub fn hit_test(db: &CadDatabase, point: Point2D, tolerance: f64) -> HitTest {
         not_searched: Vec::new(),
         followed: 0,
         hidden_refs: 0,
+        spaces: spaces(db),
     };
     search.entities(&db.entities, &Affine2::IDENTITY, &mut Vec::new());
     let Search {
