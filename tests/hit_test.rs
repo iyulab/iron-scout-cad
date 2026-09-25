@@ -5,7 +5,7 @@
 
 use iron_scout_cad::{hit_test, Hit, NotSearched, NotSearchedReason};
 use uncad_model::model::{Confidence, Entity, EntityId, Ref};
-use uncad_model::{CadDatabase, Point2D};
+use uncad_model::{CadDatabase, Point2D, Point3D};
 
 fn golden(json: &str) -> CadDatabase {
     serde_json::from_str(json).expect("the golden model deserializes")
@@ -323,6 +323,7 @@ fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
     db.tables.block_records.insert(
         "HOLE".into(),
         BlockRecord {
+            base_point: Default::default(),
             name: "HOLE".into(),
             entities: vec![circle],
         },
@@ -343,6 +344,33 @@ fn a_circle_in_a_uniformly_scaled_block_is_a_circle_of_the_scaled_radius() {
     assert_eq!(r.enclosing.len(), 1);
     assert_eq!(r.hits.len(), 1, "the INSERT's own anchor");
     assert!(r.hits[0].anchored);
+}
+
+/// The block's base point lands on the insertion point: a circle drawn
+/// around the block's base point (the definition keeps the file's
+/// coordinates, centre (30, 40) with base point (30, 40)) is found around
+/// the insertion point.
+#[test]
+fn a_block_is_placed_by_its_base_point() {
+    let mut db = circle_in_a_block(2.0, 2.0);
+    let block = db.tables.block_records.get_mut("HOLE").unwrap();
+    block.base_point = Point3D {
+        x: 30.0,
+        y: 40.0,
+        z: 0.0,
+    };
+    if let Entity::Circle(c) = &mut block.entities[0] {
+        c.center = Point3D {
+            x: 30.0,
+            y: 40.0,
+            z: 0.0,
+        };
+    }
+    // Radius 5 scaled 2 around the insertion point (50, 50).
+    let r = hit_test(&db, Point2D { x: 60.0, y: 50.0 }, 0.01);
+    assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+    assert_eq!(r.hits[0].entity_type, "CIRCLE");
+    assert_eq!(r.hits[0].via, [EntityId::new(2)]);
 }
 
 #[test]
@@ -412,6 +440,7 @@ fn a_block_that_references_itself_ends_with_the_depth_reported() {
     db.tables.block_records.insert(
         "LOOP".into(),
         BlockRecord {
+            base_point: Default::default(),
             name: "LOOP".into(),
             entities: vec![refer(2)],
         },

@@ -640,7 +640,7 @@ impl Search<'_> {
         }
         // A block placed in a plane tilted out of the world's has no exact
         // 2D placement, so its contents are not measured -- and said so.
-        let Some(own) = insert.world_transform() else {
+        let Some(own) = insert.world_transform(block.base_point) else {
             self.not_searched
                 .push(not(NotSearchedReason::NonSimilarPlacement));
             return;

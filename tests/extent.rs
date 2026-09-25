@@ -36,6 +36,7 @@ fn drawing(spaces: Vec<(&str, Vec<Value>)>) -> CadDatabase {
         db.tables.block_records.insert(
             name.to_string(),
             BlockRecord {
+                base_point: Default::default(),
                 name: name.to_string(),
                 entities,
             },
