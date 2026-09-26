@@ -3,7 +3,11 @@
 use crate::extent::SpaceExtent;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use uncad_model::model::{Confidence, DimensionKind, Entity, EntityId, Ref, TextOverride};
+use uncad_model::model::{
+    Confidence, DimensionEntity, DimensionKind, Entity, EntityId, Ref, StyleOverride, TextOverride,
+};
+use uncad_model::tables::Tables;
+use uncad_model::text::TextKind;
 use uncad_model::{CadDatabase, Ocs, Point2D};
 
 /// A layer and how much of the drawing is on it.
@@ -75,9 +79,16 @@ impl TextRef {
 /// This is what labels are matched by and values returned as; the text as
 /// written stays beside it.
 pub fn plain_text(text: &str) -> String {
-    use uncad_model::text::{tokens, Special, TextKind, Token};
+    plain(text, TextKind::Line)
+}
+
+/// `text` read as `kind` into plain text, as [`plain_text`] reads a line of
+/// text -- for MTEXT codes (a dimension's text), paragraph and column
+/// breaks read as spaces and a stack as `top/bottom`.
+fn plain(text: &str, kind: TextKind) -> String {
+    use uncad_model::text::{tokens, Special, Token};
     let mut out = String::with_capacity(text.len());
-    for token in tokens(text, TextKind::Line) {
+    for token in tokens(text, kind) {
         match token {
             Token::Char(c) => out.push(c),
             Token::Special(Special::Degree) => out.push('\u{b0}'),
@@ -117,14 +128,121 @@ pub struct DimensionSummary {
     /// measurement, nothing, or a literal (which may stand `<>` for the
     /// measurement inside a longer string).
     pub text: TextOverride,
-    /// A literal text as plain text (see [`plain_text`]); absent otherwise.
+    /// A literal text as plain text, its codes read as the MTEXT codes a
+    /// dimension's text is written in (see [`plain_text`]); absent
+    /// otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plain: Option<String>,
     /// The middle of the dimension's text (DXF 11), where it is drawn.
     pub text_midpoint: Point2D,
     /// The DIMSTYLE the dimension names.
     pub style: Ref<String>,
+    /// What that style states about tolerances, as it states it; absent
+    /// when [`Self::style`] names no style of the drawing's table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_tolerance: Option<StyleTolerance>,
+    /// The dimension's own overrides of the style's tolerance variables --
+    /// DIMTOL (71), DIMLIM (72), DIMTP (47), DIMTM (48) and DIMTDEC (272) --
+    /// as the file states them, in its order: `[]` when it overrides none,
+    /// `None` when the reader did not read the dimension's overrides at
+    /// all. Which value is shown -- the style's or the override's -- is not
+    /// decided here.
+    pub tolerance_overrides: Option<Vec<StyleOverride>>,
+    /// The stacks a literal text writes (`\S…;`), in order, as written --
+    /// `\S+0.1^-0.05;` is a tolerance written into the text itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_stacks: Vec<TextStack>,
     pub confidence: Confidence,
+}
+
+/// The tolerance variables of a dimension style, each as the style states
+/// it (`None` where the style's record does -- see the model's
+/// `DimStyleRecord`). Nothing is combined: whether a tolerance is shown,
+/// and which, follows from these together with the dimension's own
+/// overrides and text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct StyleTolerance {
+    /// DIMTOL: whether tolerances are appended to the measurement.
+    pub shown: Option<bool>,
+    /// DIMLIM: whether the text is the two limits instead.
+    pub limits: Option<bool>,
+    /// DIMTP: the upper tolerance.
+    pub upper: Option<f64>,
+    /// DIMTM: the lower tolerance, as a magnitude below the measurement.
+    pub lower: Option<f64>,
+    /// DIMTDEC: the decimal places the tolerances are written with.
+    pub decimal_places: Option<i32>,
+}
+
+/// One MTEXT stack (`\S top separator bottom ;`) of a text, as written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TextStack {
+    pub top: String,
+    pub bottom: String,
+    /// `^` (stacked without a bar -- how tolerances are written), `/` (a
+    /// fraction bar) or `#` (a diagonal bar).
+    pub separator: char,
+}
+
+/// The dimension-style variables that state tolerances, by DXF group.
+const TOLERANCE_VARIABLES: [u16; 5] = [71, 72, 47, 48, 272];
+
+impl DimensionSummary {
+    fn of(d: &DimensionEntity, tables: &Tables) -> Self {
+        use uncad_model::text::{tokens, Token};
+        let literal = match &d.text_override {
+            TextOverride::Literal(text) => Some(text.as_str()),
+            _ => None,
+        };
+        let text_stacks = literal
+            .map(|text| {
+                tokens(text, TextKind::MText)
+                    .filter_map(|t| match t {
+                        Token::Stack {
+                            top,
+                            bottom,
+                            separator,
+                        } => Some(TextStack {
+                            top: top.to_string(),
+                            bottom: bottom.to_string(),
+                            separator,
+                        }),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        DimensionSummary {
+            id: d.common.id,
+            kind: d.kind,
+            measurement: d.measurement,
+            plain: literal.map(|text| plain(text, TextKind::MText)),
+            text: d.text_override.clone(),
+            text_midpoint: d.text_midpoint,
+            style: d.style_name.clone(),
+            style_tolerance: d
+                .style_name
+                .resolved()
+                .and_then(|name| tables.dim_styles.get(name))
+                .map(|st| StyleTolerance {
+                    shown: st.tolerances,
+                    limits: st.limits,
+                    upper: st.tolerance_upper,
+                    lower: st.tolerance_lower,
+                    decimal_places: st.tolerance_decimal_places,
+                }),
+            tolerance_overrides: d.style_overrides.as_ref().map(|all| {
+                all.iter()
+                    .filter(|o| TOLERANCE_VARIABLES.contains(&o.variable))
+                    .cloned()
+                    .collect()
+            }),
+            text_stacks,
+            confidence: d.common.confidence,
+        }
+    }
 }
 
 /// Two loose TEXT entities that read as a label and its value: on the same
@@ -249,19 +367,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         }
         confidence = confidence.min(e.common().confidence);
         if let Entity::Dimension(d) = e {
-            dimensions.push(DimensionSummary {
-                id: d.common.id,
-                kind: d.kind,
-                measurement: d.measurement,
-                plain: match &d.text_override {
-                    TextOverride::Literal(text) => Some(plain_text(text)),
-                    _ => None,
-                },
-                text: d.text_override.clone(),
-                text_midpoint: d.text_midpoint,
-                style: d.style_name.clone(),
-                confidence: d.common.confidence,
-            });
+            dimensions.push(DimensionSummary::of(d, &db.tables));
         }
         if let Entity::Insert(insert) = e {
             if let Ref::Resolved(block) = &insert.block_name {

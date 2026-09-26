@@ -27,7 +27,7 @@ pub use extent::{Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason};
 pub use summary::{
     plain_text, summarize, AttributeValue, BlockSummary, DimensionSummary, LabelledText,
-    LayerSummary, Lookup, Summary, TextRef,
+    LayerSummary, Lookup, StyleTolerance, Summary, TextRef, TextStack,
 };
 
 pub use uncad_model::CadDatabase;

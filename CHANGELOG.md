@@ -27,6 +27,11 @@ bumps the minor version.
 
 ### Added
 
+- A dimension in the summary carries what is stated about its tolerances, each source as it
+  is and none chosen over another: `style_tolerance` (its style's DIMTOL, DIMLIM, DIMTP, DIMTM
+  and DIMTDEC, as `StyleTolerance`), `tolerance_overrides` (its own overrides of those
+  variables; `null` when the reader did not read its overrides) and `text_stacks` (the
+  `\S…;` stacks its literal text writes, as `TextStack`).
 - `hit_test` finds dimensions (what their block draws, the middle of their text, the point
   they were built on), MTEXT and TOLERANCE (at their insertion point), SOLID, TRACE and
   WIPEOUT (along their outline, enclosing what lies inside), 3DFACE, LEADER and MULTILEADER.
@@ -50,6 +55,8 @@ bumps the minor version.
 
 ### Fixed
 
+- A dimension's `plain` text reads its MTEXT codes: `\S+0.1^-0.05;` reads `+0.1/-0.05` and
+  `\P` a space, where the codes were kept as written.
 - An ARC whose start and end angles are equal is no longer taken for the whole circle. The
   format does not say whether such an arc is the whole circle or nothing, so it is left out of
   the extent (`not_measured`) and a point on its circle is answered with `CURVE_UNDEFINED`.

@@ -291,6 +291,88 @@ fn every_dimension_is_listed_as_the_file_states_it() {
     assert_eq!(d(302).style, Ref::Unresolved("NOT-DECLARED".into()));
 }
 
+/// G5 states no tolerance anywhere: each dimension carries its style's
+/// tolerance variables as the style states them (off, zero, decimal places
+/// unstated), no overrides and no stacks -- and the dimension whose style
+/// is not in the table has no style tolerance to carry.
+#[test]
+fn a_dimension_carries_what_its_style_states_about_tolerances() {
+    let s = summarize(&g5());
+    for d in &s.dimensions {
+        assert_eq!(d.tolerance_overrides, Some(vec![]), "{:?}", d.id);
+        assert!(d.text_stacks.is_empty(), "{:?}", d.id);
+        if d.id.value() == 302 {
+            assert!(d.style_tolerance.is_none());
+            continue;
+        }
+        let t = d.style_tolerance.as_ref().expect("ISO-25 is in the table");
+        assert_eq!(
+            (t.shown, t.limits, t.upper, t.lower, t.decimal_places),
+            (Some(false), Some(false), Some(0.0), Some(0.0), None)
+        );
+    }
+}
+
+/// A style with tolerances on, a dimension overriding the upper one, and a
+/// literal text with a tolerance stacked into it: all three are carried as
+/// stated, side by side, and none is chosen over another.
+#[test]
+fn a_tolerance_is_carried_from_the_style_the_overrides_and_the_text_alike() {
+    use uncad_model::model::{OverrideValue, StyleOverride};
+    let mut v: serde_json::Value =
+        serde_json::from_str(include_str!("golden/g5.expected.json")).unwrap();
+    let style = &mut v["tables"]["dim_styles"]["ISO-25"];
+    style["tolerances"] = true.into();
+    style["tolerance_upper"] = 0.1.into();
+    style["tolerance_lower"] = 0.05.into();
+    style["tolerance_decimal_places"] = 2.into();
+    let dims = v["entities"].as_array_mut().unwrap();
+    let dim = |dims: &mut Vec<serde_json::Value>, id: u64| {
+        dims.iter().position(|e| e["common"]["id"] == id).unwrap()
+    };
+    let at = dim(dims, 298);
+    // DIMTP overridden; DIMTXT (140) is not a tolerance variable.
+    dims[at]["style_overrides"] = serde_json::json!([
+        {"variable": 140, "value": {"type": "REAL", "data": 5.0}},
+        {"variable": 47, "value": {"type": "REAL", "data": 0.2}}
+    ]);
+    let at = dim(dims, 301);
+    dims[at]["text_override"] =
+        serde_json::json!({"type": "LITERAL", "data": "<>\\S+0.1^-0.05;\\P(REF)"});
+    let at = dim(dims, 304);
+    dims[at]["style_overrides"] = serde_json::Value::Null;
+    let db: CadDatabase = serde_json::from_value(v).unwrap();
+
+    let s = summarize(&db);
+    let d = |id: u64| s.dimensions.iter().find(|d| d.id.value() == id).unwrap();
+
+    let t = d(298).style_tolerance.as_ref().unwrap();
+    assert_eq!(
+        (t.shown, t.limits, t.upper, t.lower, t.decimal_places),
+        (Some(true), Some(false), Some(0.1), Some(0.05), Some(2))
+    );
+    assert_eq!(
+        d(298).tolerance_overrides,
+        Some(vec![StyleOverride {
+            variable: 47,
+            value: OverrideValue::Real(0.2)
+        }])
+    );
+
+    let stacks: Vec<(&str, &str, char)> = d(301)
+        .text_stacks
+        .iter()
+        .map(|s| (s.top.as_str(), s.bottom.as_str(), s.separator))
+        .collect();
+    assert_eq!(stacks, [("+0.1", "-0.05", '^')]);
+    // A dimension's text is written in MTEXT codes: the stack reads as
+    // `top/bottom` and the paragraph break as a space.
+    assert_eq!(d(301).plain.as_deref(), Some("<>+0.1/-0.05 (REF)"));
+
+    // Overrides the reader did not read are not "none".
+    assert_eq!(d(304).tolerance_overrides, None);
+}
+
 #[test]
 fn a_dimensions_text_midpoint_points_back_at_it() {
     // The summary and the hit test close a loop: where the summary says a
