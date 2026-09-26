@@ -7,16 +7,17 @@ use iron_scout_cad::{hit_test, Hit, HitTest, NotSearchedReason};
 use uncad_model::model::{Confidence, Entity, EntityId, Ref};
 use uncad_model::{CadDatabase, Point2D, Point3D};
 
-/// The fields of each not-searched report, in order, for comparing whole lists.
-fn not_searched(
-    r: &HitTest,
-) -> Vec<(
+/// A not-searched report's fields in order: id, type, via, reason, space.
+type NotSearchedFields<'a> = (
     EntityId,
-    &str,
+    &'a str,
     Vec<EntityId>,
     NotSearchedReason,
-    Option<&str>,
-)> {
+    Option<&'a str>,
+);
+
+/// The fields of each not-searched report, for comparing whole lists.
+fn not_searched(r: &HitTest) -> Vec<NotSearchedFields<'_>> {
     r.not_searched
         .iter()
         .map(|n| {
@@ -285,14 +286,13 @@ fn a_reference_to_no_block_is_reported_not_skipped() {
     assert_eq!(r.not_searched.len(), 1);
 }
 
-/// A drawing whose one block holds a circle, placed by one INSERT with the
-/// given per-axis scale.
-fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
-    use uncad_model::model::{CircleEntity, EntityCommon, InsertEntity, Origin, Point3D};
-    use uncad_model::tables::BlockRecord;
-    let common = |id: u64| EntityCommon {
+/// The fields every hand-built entity here shares: vector, high confidence,
+/// no file handle, on layer 0 in BYLAYER color -- set once, so a field the
+/// model adds is set here and nowhere else.
+fn common(id: u64) -> uncad_model::model::EntityCommon {
+    uncad_model::model::EntityCommon {
         id: EntityId::new(id),
-        origin: Origin::Vector,
+        origin: uncad_model::model::Origin::Vector,
         confidence: Confidence::High,
         source_handle: Ref::Absent,
         layer: Ref::Resolved("0".into()),
@@ -303,7 +303,14 @@ fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
         linetype_scale: 1.0,
         lineweight: Some(-1),
         transparency: Some(0),
-    };
+    }
+}
+
+/// A drawing whose one block holds a circle, placed by one INSERT with the
+/// given per-axis scale.
+fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
+    use uncad_model::model::{CircleEntity, InsertEntity, Point3D};
+    use uncad_model::tables::BlockRecord;
     let circle = Entity::Circle(CircleEntity {
         common: common(1),
         center: Point3D {
@@ -417,22 +424,8 @@ fn a_circle_in_a_stretched_block_is_not_guessed_at() {
 
 #[test]
 fn a_block_that_references_itself_ends_with_the_depth_reported() {
-    use uncad_model::model::{EntityCommon, InsertEntity, Origin, Point3D};
+    use uncad_model::model::{InsertEntity, Point3D};
     use uncad_model::tables::BlockRecord;
-    let common = |id: u64| EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Absent,
-        layer: Ref::Resolved("0".into()),
-        color_index: 256,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    };
     let refer = |id: u64| {
         Entity::Insert(InsertEntity {
             common: common(id),
