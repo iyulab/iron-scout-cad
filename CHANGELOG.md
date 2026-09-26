@@ -9,6 +9,12 @@ bumps the minor version.
 
 ### Changed
 
+- **Breaking:** The result types (`Summary`, `HitTest`, `Hit`, `NotSearched`, `SpaceExtent`,
+  `LayerSummary`, `BlockSummary`, `AttributeValue`, `TextRef`, `DimensionSummary`,
+  `LabelledText`) and `NotSearchedReason` are `#[non_exhaustive]`: they are built by this crate
+  and read by callers, so a field or reason added later is not a breaking change. Struct
+  literals and exhaustive matches outside the crate no longer compile; read the fields, and
+  add a wildcard arm.
 - **Breaking:** `Summary::attribute` and `Summary::labelled` match and return plain text
   (see `plain_text`), not the string with its control codes: pass `Ø50` rather than
   `%%c50`, and expect the sign back. The text as written stays in `value` and `text`.

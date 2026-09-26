@@ -3,9 +3,33 @@
 //! reference to a block that does not exist (G10), and mirror copies of a
 //! circle, an arc and a bulged polyline (G7).
 
-use iron_scout_cad::{hit_test, Hit, NotSearched, NotSearchedReason};
+use iron_scout_cad::{hit_test, Hit, HitTest, NotSearchedReason};
 use uncad_model::model::{Confidence, Entity, EntityId, Ref};
 use uncad_model::{CadDatabase, Point2D, Point3D};
+
+/// The fields of each not-searched report, in order, for comparing whole lists.
+fn not_searched(
+    r: &HitTest,
+) -> Vec<(
+    EntityId,
+    &str,
+    Vec<EntityId>,
+    NotSearchedReason,
+    Option<&str>,
+)> {
+    r.not_searched
+        .iter()
+        .map(|n| {
+            (
+                n.id,
+                n.entity_type.as_str(),
+                n.via.clone(),
+                n.reason,
+                n.space.as_deref(),
+            )
+        })
+        .collect()
+}
 
 fn golden(json: &str) -> CadDatabase {
     serde_json::from_str(json).expect("the golden model deserializes")
@@ -247,14 +271,14 @@ fn a_reference_to_no_block_is_reported_not_skipped() {
     let r = hit_test(&db, at, 0.5);
     assert_eq!(ids(&r.hits), [(insert.common.id, vec![])]);
     assert_eq!(
-        r.not_searched,
-        [NotSearched {
-            id: insert.common.id,
-            entity_type: "INSERT".into(),
-            via: vec![],
-            reason: NotSearchedReason::BlockReferenceUnresolved,
-            space: Some("*Model_Space".into()),
-        }]
+        not_searched(&r),
+        [(
+            insert.common.id,
+            "INSERT",
+            vec![],
+            NotSearchedReason::BlockReferenceUnresolved,
+            Some("*Model_Space")
+        )]
     );
     // Far away: the reason is still reported -- it does not depend on the point.
     let r = hit_test(&db, Point2D { x: -1e6, y: -1e6 }, 0.5);
@@ -379,15 +403,15 @@ fn a_circle_in_a_stretched_block_is_not_guessed_at() {
     let r = hit_test(&db, Point2D { x: 60.0, y: 50.0 }, 0.01);
     assert!(r.hits.is_empty(), "{:?}", r.hits);
     assert_eq!(
-        r.not_searched,
-        [NotSearched {
-            id: EntityId::new(1),
-            entity_type: "CIRCLE".into(),
-            via: vec![EntityId::new(2)],
-            reason: NotSearchedReason::NonSimilarPlacement,
+        not_searched(&r),
+        [(
+            EntityId::new(1),
+            "CIRCLE",
+            vec![EntityId::new(2)],
+            NotSearchedReason::NonSimilarPlacement,
             // This drawing lists no space block.
-            space: None,
-        }]
+            None
+        )]
     );
 }
 

@@ -8,6 +8,7 @@ use uncad_model::{CadDatabase, Ocs, Point2D};
 
 /// A layer and how much of the drawing is on it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LayerSummary {
     pub name: String,
     pub color_index: i16,
@@ -17,6 +18,7 @@ pub struct LayerSummary {
 
 /// A block definition and how often it is referenced.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BlockSummary {
     pub name: String,
     /// Entities in the definition.
@@ -28,6 +30,7 @@ pub struct BlockSummary {
 /// One attribute value attached to a block reference: what a title block's
 /// fields look like in the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AttributeValue {
     /// The INSERT that carries the value.
     pub insert: EntityId,
@@ -46,6 +49,7 @@ pub struct AttributeValue {
 
 /// A piece of text by reference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TextRef {
     pub id: EntityId,
     /// The text as the model carries it, its codes included.
@@ -100,6 +104,7 @@ pub fn plain_text(text: &str) -> String {
 /// the dimension's points: the recorded measurement and the text are the
 /// file's, and where they disagree both are listed as written.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DimensionSummary {
     pub id: EntityId,
     /// What the dimension measures; `None` when the file does not state it.
@@ -130,6 +135,7 @@ pub struct DimensionSummary {
 /// candidate, and [`Summary::labelled`] then answers with every distinct
 /// value rather than picking one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LabelledText {
     pub label: TextRef,
     pub value: TextRef,
@@ -150,6 +156,7 @@ pub enum Lookup<T> {
 
 /// What a drawing contains.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Summary {
     /// Top-level entities (model and paper space), as the model lists them.
     pub entity_count: usize,

@@ -40,6 +40,7 @@ const BLOCK_REF_BUDGET: usize = 1_000_000;
 
 /// One entity at the point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Hit {
     pub id: EntityId,
     /// The DXF type name the model reports for the entity.
@@ -93,6 +94,7 @@ pub struct Hit {
 /// Why an entity, or what a block reference draws, was not searched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
 pub enum NotSearchedReason {
     /// The INSERT carries no block reference.
     BlockReferenceAbsent,
@@ -130,6 +132,7 @@ pub enum NotSearchedReason {
 /// An entity, or a block reference's contents, that the search did not
 /// look at -- so that "no hit" is never silently "not looked at".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NotSearched {
     pub id: EntityId,
     pub entity_type: String,
@@ -143,6 +146,7 @@ pub struct NotSearched {
 
 /// What is at a point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HitTest {
     /// Entities whose geometry is within the tolerance, nearest first, then
     /// by reference ID, then by the chain they were reached through. Never

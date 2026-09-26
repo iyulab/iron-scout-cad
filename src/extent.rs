@@ -30,6 +30,7 @@ pub struct Bounds {
 /// the model carries no extent for either. Entity types it takes no point
 /// from are named.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SpaceExtent {
     /// The space's block: `*Model_Space`, or a `*Paper_Space` sheet.
     pub space: String,
