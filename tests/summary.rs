@@ -19,6 +19,10 @@ fn g7() -> CadDatabase {
     golden(include_str!("golden/g7.expected.json"))
 }
 
+fn g8() -> CadDatabase {
+    golden(include_str!("golden/g8.expected.json"))
+}
+
 fn g9() -> CadDatabase {
     golden(include_str!("golden/g9.expected.json"))
 }
@@ -353,4 +357,28 @@ fn a_low_confidence_entity_lowers_the_summary_and_its_own_pair_only() {
         .find(|p| p.label.id == label)
         .expect("the pair stays listed");
     assert_eq!(p.confidence, Confidence::Unknown);
+}
+
+/// A title block in Korean (G8 -- CP949 in the file, UTF-8 in the model):
+/// the attribute values come back as the text the file states, layer names
+/// likewise, and a lone loose text with nothing beside it is not paired.
+#[test]
+fn g8_korean_title_block_values_are_read_by_tag() {
+    let s = summarize(&g8());
+    assert_eq!(s.attribute("DWGNO"), Lookup::Unique("BP-1042"));
+    assert_eq!(
+        s.attribute("MATERIAL"),
+        Lookup::Unique(
+            "SS400 \u{C77C}\u{BC18}\u{AD6C}\u{C870}\u{C6A9} \u{C555}\u{C5F0}\u{AC15}\u{C7AC}"
+        )
+    );
+    assert_eq!(
+        s.attribute("DRAWN"),
+        Lookup::Unique("\u{D64D}\u{AE38}\u{B3D9}")
+    );
+    let layers: Vec<&str> = s.layers.iter().map(|l| l.name.as_str()).collect();
+    assert!(layers.contains(&"\u{D45C}\u{C81C}\u{B780}"), "{layers:?}");
+    assert!(layers.contains(&"\u{C678}\u{D615}\u{C120}"), "{layers:?}");
+    assert!(s.labelled_texts.is_empty(), "{:?}", s.labelled_texts);
+    assert_eq!(s.confidence, Confidence::High);
 }
