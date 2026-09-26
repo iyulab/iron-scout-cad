@@ -373,6 +373,48 @@ fn a_tolerance_is_carried_from_the_style_the_overrides_and_the_text_alike() {
     assert_eq!(d(304).tolerance_overrides, None);
 }
 
+/// A feature control frame is listed with its text as written -- two rows,
+/// the symbol-font switch, `%%v` between cells -- and that text with its
+/// MTEXT codes read; what the symbol and the cells mean is not read.
+#[test]
+fn a_feature_control_frame_is_listed_as_written() {
+    let mut v: serde_json::Value =
+        serde_json::from_str(include_str!("golden/g5.expected.json")).unwrap();
+    let mut frame = v["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "DIMENSION")
+        .unwrap()["common"]
+        .clone();
+    frame["id"] = 900.into();
+    v["entities"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "type": "TOLERANCE",
+            "common": frame,
+            "insertion_point": {"x": 10.0, "y": 20.0, "z": 0.0},
+            "text_height": null,
+            "text_value": "{\\Fgdt;r}%%v1%%v2%%v%%v%%v\n10",
+            "direction": null,
+            "style_name": {"type": "RESOLVED", "data": "ISO-25"}
+        }));
+    let db: CadDatabase = serde_json::from_value(v).unwrap();
+    let s = summarize(&db);
+    assert_eq!(s.tolerance_frames.len(), 1);
+    let f = &s.tolerance_frames[0];
+    assert_eq!(f.id, EntityId::new(900));
+    assert_eq!(f.text, "{\\Fgdt;r}%%v1%%v2%%v%%v%%v\n10");
+    assert_eq!(f.plain, "r%%v1%%v2%%v%%v%%v\n10");
+    assert_eq!((f.insertion_point.x, f.insertion_point.y), (10.0, 20.0));
+    assert_eq!(f.style, Ref::Resolved("ISO-25".into()));
+    // A drawing with no frame lists none, and says nothing about them in
+    // its JSON.
+    let g5 = serde_json::to_value(summarize(&g5())).unwrap();
+    assert!(g5.get("tolerance_frames").is_none());
+}
+
 #[test]
 fn a_dimensions_text_midpoint_points_back_at_it() {
     // The summary and the hit test close a loop: where the summary says a

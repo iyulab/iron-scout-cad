@@ -186,6 +186,26 @@ pub struct TextStack {
     pub separator: char,
 }
 
+/// A feature control frame (TOLERANCE), as the file states it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ToleranceFrame {
+    pub id: EntityId,
+    /// The frame's text as written: MTEXT codes (`{\Fgdt;j}` selects the
+    /// symbol font for the letter after it), `%%v` between what reads as
+    /// its cells, a line feed between its rows.
+    pub text: String,
+    /// The text with its MTEXT codes read (see [`DimensionSummary::plain`]):
+    /// the font switch dropped, the symbol letter and `%%v` kept.
+    pub plain: String,
+    /// Where the frame is inserted (DXF 10) -- a point [`crate::hit_test`]
+    /// finds it at.
+    pub insertion_point: Point2D,
+    /// The DIMSTYLE the frame names.
+    pub style: Ref<String>,
+    pub confidence: Confidence,
+}
+
 /// The dimension-style variables that state tolerances, by DXF group.
 const TOLERANCE_VARIABLES: [u16; 5] = [71, 72, 47, 48, 272];
 
@@ -302,6 +322,11 @@ pub struct Summary {
     /// Every dimension of the drawing's own spaces, by reference ID.
     #[serde(default)]
     pub dimensions: Vec<DimensionSummary>,
+    /// Every feature control frame (TOLERANCE) of the drawing's own spaces,
+    /// by reference ID: its text as written and where it is. What its
+    /// symbols and cells mean is not read here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tolerance_frames: Vec<ToleranceFrame>,
     /// Where each space of the drawing is -- model space and every
     /// paper-space sheet, by block name: a coordinate range to point into
     /// (see [`SpaceExtent`]).
@@ -359,6 +384,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
     let mut confidence = Confidence::High;
     let mut attributes = Vec::new();
     let mut dimensions = Vec::new();
+    let mut tolerance_frames = Vec::new();
 
     for e in &db.entities {
         *by_type.entry(e.type_name().to_string()).or_insert(0) += 1;
@@ -368,6 +394,19 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         confidence = confidence.min(e.common().confidence);
         if let Entity::Dimension(d) = e {
             dimensions.push(DimensionSummary::of(d, &db.tables));
+        }
+        if let Entity::Tolerance(t) = e {
+            tolerance_frames.push(ToleranceFrame {
+                id: t.common.id,
+                text: t.text_value.clone(),
+                plain: plain(&t.text_value, TextKind::MText),
+                insertion_point: Point2D {
+                    x: t.insertion_point.x,
+                    y: t.insertion_point.y,
+                },
+                style: t.style_name.clone(),
+                confidence: t.common.confidence,
+            });
         }
         if let Entity::Insert(insert) = e {
             if let Ref::Resolved(block) = &insert.block_name {
@@ -388,6 +427,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
     }
     attributes.sort_by(|a, b| a.insert.cmp(&b.insert).then(a.id.cmp(&b.id)));
     dimensions.sort_by_key(|d| d.id);
+    tolerance_frames.sort_by_key(|t| t.id);
 
     let layers = db
         .tables
@@ -421,6 +461,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         labelled_texts,
         unplaced_texts,
         dimensions,
+        tolerance_frames,
         extents: crate::extent::space_extents(db),
         confidence,
         warnings: db.read_diagnostics.warnings.clone(),

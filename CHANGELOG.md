@@ -27,6 +27,9 @@ bumps the minor version.
 
 ### Added
 
+- `Summary::tolerance_frames` lists every feature control frame (TOLERANCE, as
+  `ToleranceFrame`) with its text as written, that text with its MTEXT codes read, its
+  insertion point and its style. What its symbols and cells mean is not read.
 - A dimension in the summary carries what is stated about its tolerances, each source as it
   is and none chosen over another: `style_tolerance` (its style's DIMTOL, DIMLIM, DIMTP, DIMTM
   and DIMTDEC, as `StyleTolerance`), `tolerance_overrides` (its own overrides of those
