@@ -303,3 +303,54 @@ fn a_dimensions_text_midpoint_points_back_at_it() {
         );
     }
 }
+
+/// Lowers the confidence of every copy of `id` (model space is listed at
+/// the top level and in its block record).
+fn lower(db: &mut CadDatabase, id: EntityId, to: Confidence) {
+    db.entities
+        .iter_mut()
+        .chain(
+            db.tables
+                .block_records
+                .values_mut()
+                .flat_map(|b| b.entities.iter_mut()),
+        )
+        .filter(|e| e.common().id == id)
+        .for_each(|e| e.common_mut().confidence = to);
+}
+
+/// One entity the reader was unsure of lowers the whole summary to its
+/// confidence, and the pair it takes part in; the pairs it does not touch
+/// keep theirs. Nothing summarized reads higher than what it was built from.
+#[test]
+fn a_low_confidence_entity_lowers_the_summary_and_its_own_pair_only() {
+    let clean = summarize(&g7());
+    assert_eq!(clean.confidence, Confidence::High);
+    let pair = &clean.labelled_texts[0];
+    let (low_value, label) = (pair.value.id, pair.label.id);
+
+    let mut db = g7();
+    lower(&mut db, low_value, Confidence::Low);
+    let s = summarize(&db);
+    assert_eq!(s.confidence, Confidence::Low);
+    for p in &s.labelled_texts {
+        let expected = if p.value.id == low_value || p.label.id == low_value {
+            Confidence::Low
+        } else {
+            Confidence::High
+        };
+        assert_eq!(p.confidence, expected, "pair of {:?}", p.label.plain);
+    }
+    assert!(s.labelled_texts.iter().any(|p| p.label.id == label));
+
+    // Unknown is lower still, and wins over Low.
+    lower(&mut db, label, Confidence::Unknown);
+    let s = summarize(&db);
+    assert_eq!(s.confidence, Confidence::Unknown);
+    let p = s
+        .labelled_texts
+        .iter()
+        .find(|p| p.label.id == label)
+        .expect("the pair stays listed");
+    assert_eq!(p.confidence, Confidence::Unknown);
+}
