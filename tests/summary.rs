@@ -506,3 +506,39 @@ fn g8_korean_title_block_values_are_read_by_tag() {
     assert!(s.labelled_texts.is_empty(), "{:?}", s.labelled_texts);
     assert_eq!(s.confidence, Confidence::High);
 }
+
+/// G10: a block reference to a block the file never defines. It is counted
+/// among the INSERTs and listed, with the name the file wrote, among the
+/// references that resolve to nothing -- not dropped because no block
+/// definition counts it.
+#[test]
+fn g10_names_the_reference_to_a_block_the_file_never_defines() {
+    let db = golden(include_str!("golden/g10.expected.json"));
+    let insert = db
+        .entities
+        .iter()
+        .find_map(|e| match e {
+            Entity::Insert(i) => Some(i.common.id),
+            _ => None,
+        })
+        .expect("G10 has a block reference");
+    let s = summarize(&db);
+    assert_eq!(s.by_type.get("INSERT"), Some(&1));
+    assert!(
+        s.blocks.iter().all(|b| b.insert_count == 0),
+        "{:?}",
+        s.blocks
+    );
+    assert_eq!(s.unresolved_inserts.len(), 1, "{:?}", s.unresolved_inserts);
+    assert_eq!(s.unresolved_inserts[0].insert, insert);
+    assert_eq!(
+        s.unresolved_inserts[0].block,
+        Ref::Unresolved("MISSING".to_string())
+    );
+    let json = serde_json::to_value(&s).unwrap();
+    assert_eq!(json["unresolved_inserts"][0]["block"]["data"], "MISSING");
+
+    // A drawing whose references all resolve says nothing about them.
+    let g1 = serde_json::to_value(summarize(&g1())).unwrap();
+    assert!(g1.get("unresolved_inserts").is_none());
+}

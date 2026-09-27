@@ -27,6 +27,11 @@ bumps the minor version.
 
 ### Added
 
+- `Summary::unresolved_inserts` (`UnresolvedInsert`): every top-level block reference whose
+  block the drawing does not hold -- a name the file never defines, or none -- with what it
+  points at. Such a reference draws nothing and no `BlockSummary` counts it; it used to show
+  only in `by_type`. Absent from the JSON form when empty.
+
 - `Summary::tolerance_frames` lists every feature control frame (TOLERANCE, as
   `ToleranceFrame`) with its text as written, that text with its MTEXT codes read, its
   insertion point and its style. What its symbols and cells mean is not read.

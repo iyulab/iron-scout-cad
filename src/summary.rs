@@ -31,6 +31,19 @@ pub struct BlockSummary {
     pub insert_count: usize,
 }
 
+/// A block reference whose block the drawing does not hold: the file names
+/// one it never defines, or names none. It draws nothing, and no
+/// [`BlockSummary`] counts it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct UnresolvedInsert {
+    /// The INSERT.
+    pub insert: EntityId,
+    /// What it points at, as the model holds it: `Unresolved` with what the
+    /// file wrote (a name, or a handle), or `Absent`.
+    pub block: Ref<String>,
+}
+
 /// One attribute value attached to a block reference: what a title block's
 /// fields look like in the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -304,6 +317,11 @@ pub struct Summary {
     pub layers: Vec<LayerSummary>,
     /// Every block definition except the two space records, by name.
     pub blocks: Vec<BlockSummary>,
+    /// Every top-level block reference whose block the drawing does not
+    /// hold, by reference ID: counted in `by_type`, drawn as nothing,
+    /// listed here with what it points at.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unresolved_inserts: Vec<UnresolvedInsert>,
     /// Every attribute value attached to a block reference, by the INSERT's
     /// reference ID, then the ATTRIB's.
     pub attributes: Vec<AttributeValue>,
@@ -381,6 +399,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
     let mut by_type = BTreeMap::new();
     let mut per_layer: BTreeMap<&str, usize> = BTreeMap::new();
     let mut per_block: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut unresolved_inserts = Vec::new();
     let mut confidence = Confidence::High;
     let mut attributes = Vec::new();
     let mut dimensions = Vec::new();
@@ -409,8 +428,12 @@ pub fn summarize(db: &CadDatabase) -> Summary {
             });
         }
         if let Entity::Insert(insert) = e {
-            if let Ref::Resolved(block) = &insert.block_name {
-                *per_block.entry(block.as_str()).or_insert(0) += 1;
+            match &insert.block_name {
+                Ref::Resolved(block) => *per_block.entry(block.as_str()).or_insert(0) += 1,
+                other => unresolved_inserts.push(UnresolvedInsert {
+                    insert: insert.common.id,
+                    block: other.clone(),
+                }),
             }
             for a in &insert.attribs {
                 attributes.push(AttributeValue {
@@ -457,6 +480,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         by_type,
         layers,
         blocks,
+        unresolved_inserts,
         attributes,
         labelled_texts,
         unplaced_texts,
