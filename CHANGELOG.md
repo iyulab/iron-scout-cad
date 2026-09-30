@@ -33,6 +33,15 @@ bumps the minor version.
   `within`), and the area the paths bound -- islands alternating -- encloses the points inside
   it. A hatch on a tilted plane is `NON_SIMILAR_PLACEMENT`; one with a spline edge the file does
   not define, or a rational one, is `CURVE_UNDEFINED` or `CURVE_BOUND_UNKNOWN`.
+- `hit_test` measures an MLINE by its lines: its style's offsets, at the MLINE's scale, from
+  the centerline along each vertex's miter direction. `NotSearchedReason` gains
+  `STYLE_UNDEFINED`, for an MLINE whose style is not in the drawing or whose scale is not
+  known.
+- A space's extent, and a window selection, take the same points as the hit test for the types
+  it now measures: a hatch's boundary (the reach of its arcs and ellipses, a spline edge's
+  control points), an MLINE's lines, a raster image's frame, a light's position, a 3D
+  polyline's vertices and a body's edges when they lie at one height -- so what can be pointed
+  at can also be found by where it is. A RAY or XLINE still has no box: it has no end.
 
 ## [0.2.0] - 2026-09-29
 

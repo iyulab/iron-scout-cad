@@ -1,11 +1,15 @@
 //! Where a drawing is: per space, the box around the points this crate
 //! measures entities by -- a coordinate range to point into.
 
-use crate::geometry::{flat_plane, in_plane, world_angle, world_xy, xy};
+use crate::boundary::hatch_points;
+use crate::geometry::{
+    flat_in_xy, flat_plane, image_frame, in_plane, mline_lines, world_angle, world_xy, xy,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uncad_model::bulge;
 use uncad_model::model::{Entity, EntityId};
+use uncad_model::tables::Tables;
 use uncad_model::{Affine2, BulgeArc, CadDatabase, Point2D, Point3D};
 
 /// An axis-aligned box, in the drawing's own units.
@@ -25,7 +29,10 @@ pub struct Bounds {
 /// curve) or, for one stored only by the points it passes through, those
 /// points, a text's anchor, a block reference's insertion point, a
 /// dimension's text and the points it was built on, and the corners,
-/// boundaries and vertices of the rest, and a viewport's frame on its sheet.
+/// boundaries and vertices of the rest, and a viewport's frame on its sheet --
+/// a hatch's boundary (the reach of its arcs and ellipses, a spline edge's
+/// control points), an MLINE's lines, a raster image's frame, a light's
+/// position, and a body's edges when they lie at one height.
 /// What a block reference draws, and a text's glyphs, can reach past it --
 /// the model carries no extent for either. Entity types it takes no point
 /// from are named.
@@ -78,7 +85,7 @@ pub(crate) fn space_extents(db: &CadDatabase) -> Vec<SpaceExtent> {
             let mut boxes: Vec<(EntityId, Bounds)> = Vec::new();
             for e in &block.entities {
                 let from = points.len();
-                if points_of(e, &mut points) {
+                if points_of(e, &db.tables, &mut points) {
                     if let Some(b) = bounds(&points[from..]) {
                         boxes.push((e.common().id, b));
                     }
@@ -144,7 +151,7 @@ fn arc_reach(arc: &BulgeArc, out: &mut Vec<Point2D>) {
 }
 
 /// Adds the points `e` is measured by to `out`; `false` when it gives none.
-pub(crate) fn points_of(e: &Entity, out: &mut Vec<Point2D>) -> bool {
+pub(crate) fn points_of(e: &Entity, tables: &Tables, out: &mut Vec<Point2D>) -> bool {
     let before = out.len();
     match e {
         Entity::Line(l) => out.extend([xy(l.start_point), xy(l.end_point)]),
@@ -298,6 +305,25 @@ pub(crate) fn points_of(e: &Entity, out: &mut Vec<Point2D>) -> bool {
         },
         Entity::Leader(l) => out.extend(l.vertices.iter().map(|&v| xy(v))),
         Entity::MultiLeader(m) => out.extend(m.lines.iter().flatten().map(|&v| xy(v))),
+        Entity::Polyline3D(p) => out.extend(p.vertices.iter().map(|&v| xy(v))),
+        Entity::Image(i) => out.extend(image_frame(i).unwrap_or_default()),
+        Entity::Light(l) => out.push(xy(l.position)),
+        // A profile flat in the world's XY; one with depth is not drawn in
+        // plan.
+        Entity::Solid3D(s)
+        | Entity::Region(s)
+        | Entity::PolylinePFace(s)
+        | Entity::PolylineMesh(s)
+            if flat_in_xy(&s.wireframe_edges) =>
+        {
+            out.extend(s.wireframe_edges.iter().flatten().map(|&q| xy(q)))
+        }
+        Entity::Hatch(h) => {
+            hatch_points(h, out);
+        }
+        Entity::MLine(l) => out.extend(mline_lines(l, tables).into_iter().flatten().flatten()),
+        // A construction line (RAY, XLINE) has no end, so no box holds it:
+        // whether it reaches into a window is not told by points.
         _ => {}
     }
     out.len() > before

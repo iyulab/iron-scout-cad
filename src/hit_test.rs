@@ -17,14 +17,15 @@
 use crate::curve::{self, Curve};
 use crate::geometry::{
     distance, distance_to_arc, distance_to_line, distance_to_segment, distance_to_segments,
-    flat_in_xy, flat_plane, in_plane, shape_contains, world_angle, world_xy, xy,
+    flat_in_xy, flat_plane, image_frame, in_plane, mline_lines, shape_contains, world_angle,
+    world_xy, xy,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
-    Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, ImageEntity,
-    LeaderPath, Ref,
+    Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderPath,
+    MLineEntity, Ref,
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
@@ -129,6 +130,10 @@ pub enum NotSearchedReason {
     /// this crate cannot bound how far the curve strays between them, so it
     /// gives no distance rather than one it cannot vouch for.
     CurveBoundUnknown,
+    /// An MLINE whose style is not in the drawing (or has no lines), or
+    /// whose scale the model was not given: the style's offsets, at that
+    /// scale, are where its lines run, and this crate does not guess them.
+    StyleUndefined,
 }
 
 /// An entity, or a block reference's contents, that the search did not
@@ -495,14 +500,13 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
                 true,
             )
         }
-        Entity::Image(i) => {
-            let frame = image_outline(i);
-            if enclosed_area(&frame) == 0.0 {
-                return Where::Unsupported;
+        Entity::Image(i) => match image_frame(i) {
+            Some(frame) => {
+                let frame: Vec<Point2D> = frame.into_iter().map(at).collect();
+                outline(p, &frame, true)
             }
-            let frame: Vec<Point2D> = frame.into_iter().map(at).collect();
-            outline(p, &frame, true)
-        }
+            None => Where::Unsupported,
+        },
         // A profile in one plane parallel to the world's is drawn seen from
         // above. One with depth is drawn in a projection whose coordinates
         // are not the drawing's, so there is nothing in plan to point at.
@@ -524,36 +528,6 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
         }
         _ => Where::Unsupported,
     }
-}
-
-/// Where a raster image sits: its clip boundary when clipping is on and
-/// keeps what is inside it, otherwise the whole image's frame -- the
-/// pixel-to-world mapping [`ImageEntity`] states, taken to its four
-/// corners.
-fn image_outline(i: &ImageEntity) -> Vec<Point2D> {
-    if i.clipping == Some(true) && i.clip_outside != Some(true) && i.boundary.len() >= 3 {
-        return i.boundary.clone();
-    }
-    let (o, u, v) = (i.insertion_point, i.u_vector, i.v_vector);
-    let (w, h) = (i.size_pixels.x, i.size_pixels.y);
-    let at = |a: f64, b: f64| Point2D {
-        x: o.x + a * u.x + b * v.x,
-        y: o.y + a * u.y + b * v.y,
-    };
-    vec![at(0.0, 0.0), at(w, 0.0), at(w, h), at(0.0, h)]
-}
-
-/// Twice the area a closed outline encloses, unsigned: `0` for fewer than
-/// three points or points on one line.
-fn enclosed_area(points: &[Point2D]) -> f64 {
-    let n = points.len();
-    (0..n)
-        .map(|k| {
-            let (a, b) = (points[k], points[(k + 1) % n]);
-            a.x * b.y - b.x * a.y
-        })
-        .sum::<f64>()
-        .abs()
 }
 
 /// A curve's chords as a [`Where`]: a closed one encloses what lies inside
@@ -639,6 +613,7 @@ impl Search<'_> {
             };
             let place = match entity {
                 Entity::Dimension(d) => self.locate_dimension(d, t, scale),
+                Entity::MLine(l) => self.locate_mline(l, t),
                 _ => locate(entity, self.point, t, scale, self.tolerance),
             };
             match place {
@@ -732,6 +707,28 @@ impl Search<'_> {
                 inside: false,
             },
             (distance, true, _) => Where::Anchor(distance),
+        }
+    }
+
+    /// An MLINE is its parallel lines: the style's offsets, at the MLINE's
+    /// scale, from the centerline along each vertex's miter direction --
+    /// seen from above, as a LINE is. Without its style or its scale, where
+    /// the lines run is not known.
+    fn locate_mline(&self, l: &MLineEntity, t: &Affine2) -> Where {
+        let Some(lines) = mline_lines(l, &self.db.tables) else {
+            return Where::NotSearched(NotSearchedReason::StyleUndefined);
+        };
+        let distance = lines
+            .iter()
+            .map(|line| line.iter().map(|&q| t.apply(q)).collect::<Vec<_>>())
+            .filter_map(|line| straight_distance(self.point, &line, l.closed))
+            .reduce(f64::min);
+        match distance {
+            Some(distance) => Where::Geometry {
+                distance,
+                inside: false,
+            },
+            None => Where::Unsupported,
         }
     }
 

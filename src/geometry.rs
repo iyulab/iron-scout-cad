@@ -2,6 +2,8 @@
 //! Everything is on `f64` as computed, with no rounding.
 
 use uncad_model::bulge::Segment;
+use uncad_model::model::{ImageEntity, MLineEntity};
+use uncad_model::tables::Tables;
 use uncad_model::{Affine2, BulgeArc, Ocs, Point2D, Point3D};
 
 /// The coordinate system of an entity written in its own plane, when that
@@ -99,6 +101,63 @@ pub(crate) fn flat_in_xy(edges: &[[Point3D; 2]]) -> bool {
         return false;
     }
     (hi_z - lo_z) <= 1e-9 * (hi - lo).max(1.0)
+}
+
+/// Where a raster image sits, in the world's XY: its clip boundary when
+/// clipping is on and keeps what is inside it, otherwise the whole image's
+/// frame -- the pixel-to-world mapping [`ImageEntity`] states, taken to its
+/// four corners. `None` when that outline encloses nothing (no size, or no
+/// pixel vectors).
+pub(crate) fn image_frame(i: &ImageEntity) -> Option<Vec<Point2D>> {
+    let frame = if i.clipping == Some(true) && i.clip_outside != Some(true) && i.boundary.len() >= 3
+    {
+        i.boundary.clone()
+    } else {
+        let (o, u, v) = (i.insertion_point, i.u_vector, i.v_vector);
+        let (w, h) = (i.size_pixels.x, i.size_pixels.y);
+        let at = |a: f64, b: f64| Point2D {
+            x: o.x + a * u.x + b * v.x,
+            y: o.y + a * u.y + b * v.y,
+        };
+        vec![at(0.0, 0.0), at(w, 0.0), at(w, h), at(0.0, h)]
+    };
+    // Twice the enclosed area (the shoelace sum), unsigned.
+    let n = frame.len();
+    let area = (0..n)
+        .map(|k| {
+            let (a, b) = (frame[k], frame[(k + 1) % n]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum::<f64>()
+        .abs();
+    (area > 0.0).then_some(frame)
+}
+
+/// An MLINE's lines, seen from above: for each offset of its style, at the
+/// MLINE's scale, the centerline's vertices moved that far along each
+/// vertex's miter direction. `None` when the style is not in `tables` or
+/// has no offsets, or the MLINE carries no scale -- where its lines run is
+/// not known then.
+pub(crate) fn mline_lines(l: &MLineEntity, tables: &Tables) -> Option<Vec<Vec<Point2D>>> {
+    let offsets = tables.mlinestyles.get(l.mlinestyle_name.resolved()?)?;
+    let scale = l.scale?;
+    if offsets.is_empty() {
+        return None;
+    }
+    Some(
+        offsets
+            .iter()
+            .map(|&offset| {
+                l.vertices
+                    .iter()
+                    .map(|v| Point2D {
+                        x: v.point.x + v.miter_direction.x * offset * scale,
+                        y: v.point.y + v.miter_direction.y * offset * scale,
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
 }
 
 /// Distance from `p` to a polyline's segments, each straight or the arc

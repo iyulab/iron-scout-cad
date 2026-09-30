@@ -1,15 +1,17 @@
-//! A HATCH's boundary, placed where it is drawn: each boundary path as the
-//! segments it runs through, in order.
+//! A HATCH's boundary: each boundary path as the pieces it runs through, in
+//! order, in the hatch's own plane -- then placed where it is drawn, to point
+//! at, or taken to the world as points, for its extent.
 //!
 //! Everything a HATCH states is in its own plane (its extrusion and
 //! elevation), so the whole boundary is placed through one map from that
 //! plane to the world's XY. Straight edges and bulged polyline segments are
 //! exact, and so is an arc edge: it becomes bulged segments of a quarter turn
-//! or less. An elliptical or spline edge is cut into chords the way an
-//! ELLIPSE or SPLINE entity is, and says how far the curve can be from them.
+//! or less. An elliptical or spline edge is the same curve as an ELLIPSE or
+//! SPLINE entity, cut into chords to point at, and says how far the curve
+//! can be from them.
 
 use crate::curve::{self, Curve};
-use crate::geometry::{distance_to_segments, in_plane, shape_contains};
+use crate::geometry::{distance_to_segments, in_plane, shape_contains, xy};
 use crate::hit_test::NotSearchedReason;
 use std::f64::consts::{FRAC_PI_2, TAU};
 use uncad_model::bulge::{self, Segment};
@@ -49,6 +51,24 @@ impl Boundary {
     }
 }
 
+/// One stretch of a boundary path, in the hatch's own plane.
+enum Piece {
+    /// Straight or bulged segments through `vertices` -- closed back to the
+    /// first vertex for a polyline path.
+    Run {
+        vertices: Vec<PolylineVertex>,
+        closed: bool,
+    },
+    /// An elliptical edge, as an ELLIPSE running counter-clockwise over the
+    /// edge's span; `reversed` when the path runs it the other way.
+    Ellipse {
+        ellipse: EllipseEntity,
+        reversed: bool,
+    },
+    /// A spline edge, as a SPLINE.
+    Spline(SplineEntity),
+}
+
 /// The boundary of `h` placed through `t`, its chords good to `tolerance`.
 /// Not placed when the hatch's plane is tilted out of the world's, or when
 /// an arc would not stay an arc (`NonSimilarPlacement`); not measured when an
@@ -64,38 +84,105 @@ pub(crate) fn hatch(
     let turning = turning(&m);
     let mut within: Option<f64> = None;
     let mut paths = Vec::new();
-    for path in &h.boundary_paths {
-        let segments = match path {
-            HatchBoundaryPath::Polyline(vertices) => {
-                if vertices.iter().any(|v| v.bulge != 0.0) && turning.is_none() {
-                    return Err(NotSearchedReason::NonSimilarPlacement);
+    for path in pieces(h) {
+        let mut segments = Vec::new();
+        for piece in path {
+            match piece {
+                Piece::Run { vertices, closed } => {
+                    let placed = place(&vertices, &m, turning)
+                        .ok_or(NotSearchedReason::NonSimilarPlacement)?;
+                    segments.extend(bulge::segments(&placed, closed));
                 }
-                let placed: Vec<PolylineVertex> = vertices
-                    .iter()
-                    .map(|v| PolylineVertex {
-                        point: m.apply(v.point),
-                        bulge: v.bulge * turning.unwrap_or(1.0),
-                        ..*v
-                    })
-                    .collect();
-                bulge::segments(&placed, true).collect()
-            }
-            HatchBoundaryPath::Edges(edges) => {
-                let mut segments = Vec::new();
-                for edge in edges {
-                    let (edge_segments, edge_within) =
-                        edge_segments(h, edge, &m, turning, tolerance)?;
-                    segments.extend(edge_segments);
-                    if let Some(w) = edge_within {
-                        within = Some(within.map_or(w, |v| v.max(w)));
-                    }
+                Piece::Ellipse { ellipse, reversed } => {
+                    let (chords, w) = chords(curve::ellipse(&ellipse, &m, tolerance), reversed)?;
+                    segments.extend(chords);
+                    within = Some(within.map_or(w, |v| v.max(w)));
                 }
-                segments
+                Piece::Spline(spline) => {
+                    let (chords, w) = chords(curve::spline(&spline, &m, tolerance), false)?;
+                    segments.extend(chords);
+                    within = Some(within.map_or(w, |v| v.max(w)));
+                }
             }
-        };
+        }
         paths.push(segments);
     }
     Ok(Boundary { paths, within })
+}
+
+/// Adds the points `h`'s boundary reaches, in the world's XY, to `out`: the
+/// ends of its segments and arcs and where each arc and ellipse turns in x
+/// or y, and a spline's control points, whose box holds the curve (or, for
+/// one the file does not define, the points it passes through). `false`
+/// when it adds none -- a hatch on a tilted plane has no exact place in the
+/// world's XY.
+pub(crate) fn hatch_points(h: &HatchEntity, out: &mut Vec<Point2D>) -> bool {
+    let before = out.len();
+    let Some(m) = in_plane(h.extrusion, &Affine2::IDENTITY) else {
+        return false;
+    };
+    let turning = turning(&m);
+    for piece in pieces(h).into_iter().flatten() {
+        match piece {
+            Piece::Run { vertices, closed } => {
+                let Some(placed) = place(&vertices, &m, turning) else {
+                    continue;
+                };
+                for s in bulge::segments(&placed, closed) {
+                    out.extend([s.from, s.to]);
+                    if let Some(arc) = &s.arc {
+                        out.extend(arc.extremes());
+                    }
+                }
+                if placed.len() == 1 {
+                    out.push(placed[0].point);
+                }
+            }
+            Piece::Ellipse { ellipse, .. } => {
+                let ends = [ellipse.start_angle, ellipse.start_angle + ellipse.sweep()];
+                let turns = ellipse.extremes().unwrap_or_default();
+                out.extend(
+                    ends.into_iter()
+                        .filter_map(|a| ellipse.point_at(a))
+                        .chain(turns)
+                        .map(|q| m.apply(xy(q))),
+                );
+            }
+            Piece::Spline(spline) => {
+                let hull = match spline.nurbs() {
+                    Some(_) => &spline.control_points,
+                    None => &spline.fit_points,
+                };
+                out.extend(hull.iter().map(|&q| m.apply(xy(q))));
+            }
+        }
+    }
+    out.len() > before
+}
+
+/// `vertices` placed through `m`, each bulge turned the way `m` turns a
+/// circle; `None` when the run has an arc and `m` would not keep it one.
+fn place(
+    vertices: &[PolylineVertex],
+    m: &Affine2,
+    turning: Option<f64>,
+) -> Option<Vec<PolylineVertex>> {
+    let has_arcs = vertices.iter().any(|v| v.bulge != 0.0);
+    let turning = match turning {
+        Some(t) => t,
+        None if has_arcs => return None,
+        None => 1.0,
+    };
+    Some(
+        vertices
+            .iter()
+            .map(|v| PolylineVertex {
+                point: m.apply(v.point),
+                bulge: v.bulge * turning,
+                ..*v
+            })
+            .collect(),
+    )
 }
 
 /// `1` when `m` keeps a circle a circle turning the same way, `-1` when it
@@ -111,6 +198,20 @@ fn turning(m: &Affine2) -> Option<f64> {
         ..*m
     };
     mirrored.similarity_scale().map(|_| -1.0)
+}
+
+/// Each boundary path of `h` as its pieces, in the hatch's own plane.
+fn pieces(h: &HatchEntity) -> Vec<Vec<Piece>> {
+    h.boundary_paths
+        .iter()
+        .map(|path| match path {
+            HatchBoundaryPath::Polyline(vertices) => vec![Piece::Run {
+                vertices: vertices.clone(),
+                closed: true,
+            }],
+            HatchBoundaryPath::Edges(edges) => edges.iter().map(|e| piece(h, e)).collect(),
+        })
+        .collect()
 }
 
 /// Where an arc or elliptical-arc edge starts, counter-clockwise from +x,
@@ -137,14 +238,6 @@ fn edge_span(start_angle: f64, end_angle: f64, is_ccw: bool) -> (f64, f64) {
     }
 }
 
-fn straight(from: Point2D, to: Point2D) -> Segment {
-    Segment {
-        from,
-        to,
-        arc: None,
-    }
-}
-
 fn in_3d(p: Point2D) -> Point3D {
     Point3D {
         x: p.x,
@@ -153,19 +246,16 @@ fn in_3d(p: Point2D) -> Point3D {
     }
 }
 
-/// One edge's segments, placed through `m`, in the direction the path runs,
-/// and how far its chords can be from its curve when it is cut into chords.
-fn edge_segments(
-    h: &HatchEntity,
-    edge: &HatchEdge,
-    m: &Affine2,
-    turning: Option<f64>,
-    tolerance: f64,
-) -> Result<(Vec<Segment>, Option<f64>), NotSearchedReason> {
+/// One edge as a piece, in the direction the path runs.
+fn piece(h: &HatchEntity, edge: &HatchEdge) -> Piece {
     match edge {
-        HatchEdge::Line { start, end } => {
-            Ok((vec![straight(m.apply(*start), m.apply(*end))], None))
-        }
+        HatchEdge::Line { start, end } => Piece::Run {
+            vertices: vec![
+                PolylineVertex::straight(*start),
+                PolylineVertex::straight(*end),
+            ],
+            closed: false,
+        },
         HatchEdge::Arc {
             center,
             radius,
@@ -173,31 +263,33 @@ fn edge_segments(
             end_angle,
             is_ccw,
         } => {
-            let turning = turning.ok_or(NotSearchedReason::NonSimilarPlacement)?;
             let (from, sweep) = edge_span(*start_angle, *end_angle, *is_ccw);
             // Pieces of a quarter turn or less, each a bulged segment: a
             // bulge is the tangent of a quarter of its sweep, finite below a
             // whole turn.
-            let pieces = ((sweep.abs() / FRAC_PI_2).ceil() as usize).max(1);
-            let piece = sweep / pieces as f64;
+            let count = ((sweep.abs() / FRAC_PI_2).ceil() as usize).max(1);
+            let step = sweep / count as f64;
             let bulge = if *radius > 0.0 {
-                (piece / 4.0).tan() * turning
+                (step / 4.0).tan()
             } else {
                 0.0
             };
-            let vertices: Vec<PolylineVertex> = (0..=pieces)
+            let vertices = (0..=count)
                 .map(|i| {
-                    let a = from + piece * i as f64;
+                    let a = from + step * i as f64;
                     PolylineVertex {
-                        bulge: if i < pieces { bulge } else { 0.0 },
-                        ..PolylineVertex::straight(m.apply(Point2D {
+                        bulge: if i < count { bulge } else { 0.0 },
+                        ..PolylineVertex::straight(Point2D {
                             x: center.x + radius * a.cos(),
                             y: center.y + radius * a.sin(),
-                        }))
+                        })
                     }
                 })
                 .collect();
-            Ok((bulge::segments(&vertices, false).collect(), None))
+            Piece::Run {
+                vertices,
+                closed: false,
+            }
         }
         HatchEdge::Ellipse {
             center,
@@ -207,30 +299,32 @@ fn edge_segments(
             end_angle,
             is_ccw,
         } => {
-            // The same ellipse as an ELLIPSE entity in the hatch's plane,
-            // running counter-clockwise over the edge's span; a clockwise
-            // edge's chords are then walked back so the path keeps its
-            // direction.
+            // The ELLIPSE runs counter-clockwise over the edge's span; a
+            // clockwise edge's chords are walked back so the path keeps its
+            // direction. The reference fields are the hatch's own: the
+            // ellipse is a measure, never part of an answer.
             let (from, sweep) = edge_span(*start_angle, *end_angle, *is_ccw);
             let (start, end_parameter) = if sweep >= 0.0 {
                 (from, from + sweep)
             } else {
                 (from + sweep, from)
             };
-            let ellipse = EllipseEntity {
-                common: h.common.clone(),
-                center: in_3d(*center),
-                major_axis_endpoint: in_3d(*end),
-                axis_ratio: *minor_major_ratio,
-                start_angle: start,
-                end_angle: end_parameter,
-                extrusion: Point3D {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 1.0,
+            Piece::Ellipse {
+                ellipse: EllipseEntity {
+                    common: h.common.clone(),
+                    center: in_3d(*center),
+                    major_axis_endpoint: in_3d(*end),
+                    axis_ratio: *minor_major_ratio,
+                    start_angle: start,
+                    end_angle: end_parameter,
+                    extrusion: Point3D {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    },
                 },
-            };
-            chord_segments(curve::ellipse(&ellipse, m, tolerance), sweep < 0.0)
+                reversed: sweep < 0.0,
+            }
         }
         HatchEdge::Spline {
             degree,
@@ -242,41 +336,43 @@ fn edge_segments(
             fit_points,
             start_tangent,
             end_tangent,
-        } => {
-            let spline = SplineEntity {
-                common: h.common.clone(),
-                degree: *degree,
-                closed: None,
-                periodic: Some(*periodic),
-                knots: knots.clone(),
-                weights: if *rational {
-                    weights.clone()
-                } else {
-                    Vec::new()
-                },
-                fit_points: fit_points.iter().copied().map(in_3d).collect(),
-                control_points: control_points.iter().copied().map(in_3d).collect(),
-                start_tangent: start_tangent.map(in_3d),
-                end_tangent: end_tangent.map(in_3d),
-            };
-            chord_segments(curve::spline(&spline, m, tolerance), false)
-        }
+        } => Piece::Spline(SplineEntity {
+            common: h.common.clone(),
+            degree: *degree,
+            closed: None,
+            periodic: Some(*periodic),
+            knots: knots.clone(),
+            weights: if *rational {
+                weights.clone()
+            } else {
+                Vec::new()
+            },
+            fit_points: fit_points.iter().copied().map(in_3d).collect(),
+            control_points: control_points.iter().copied().map(in_3d).collect(),
+            start_tangent: start_tangent.map(in_3d),
+            end_tangent: end_tangent.map(in_3d),
+        }),
     }
 }
 
-/// A curve's chords as straight segments, walked back when `reversed`.
-fn chord_segments(
-    curve: Curve,
-    reversed: bool,
-) -> Result<(Vec<Segment>, Option<f64>), NotSearchedReason> {
+/// A curve's chords as straight segments, walked back when `reversed`, and
+/// how far they may be from the curve.
+fn chords(curve: Curve, reversed: bool) -> Result<(Vec<Segment>, f64), NotSearchedReason> {
     match curve {
         Curve::Chords(c) => {
             let mut points = c.points;
             if reversed {
                 points.reverse();
             }
-            let segments = points.windows(2).map(|w| straight(w[0], w[1])).collect();
-            Ok((segments, Some(c.within)))
+            let segments = points
+                .windows(2)
+                .map(|w| Segment {
+                    from: w[0],
+                    to: w[1],
+                    arc: None,
+                })
+                .collect();
+            Ok((segments, c.within))
         }
         Curve::Undefined => Err(NotSearchedReason::CurveUndefined),
         Curve::BoundUnknown => Err(NotSearchedReason::CurveBoundUnknown),

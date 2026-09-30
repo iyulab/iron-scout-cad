@@ -183,7 +183,7 @@ pub fn select(db: &CadDatabase, selection: &Selection) -> Selected {
             }
         }
         let mut points: Vec<Point2D> = Vec::new();
-        let measured = points_of(e, &mut points);
+        let measured = points_of(e, &db.tables, &mut points);
         let b = if measured { bounds(&points) } else { None };
         if b.is_none() {
             not_measured.insert(e.type_name().to_string());
