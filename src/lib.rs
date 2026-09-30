@@ -27,7 +27,7 @@ mod hit_test;
 mod select;
 mod summary;
 
-pub use extent::{Bounds, SpaceExtent};
+pub use extent::{BoundedBy, Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason};
 pub use select::{select, Selected, SelectedEntity, Selection, SpaceFilter};
 pub use summary::{

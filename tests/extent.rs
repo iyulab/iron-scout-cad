@@ -288,3 +288,43 @@ fn an_arc_whose_angles_are_a_whole_turn_apart_is_the_whole_circle() {
     let r = iron_scout_cad::hit_test(&db, p(0.0, -10.0), 1e-9);
     assert_eq!(r.hits.len(), 1, "{r:?}");
 }
+
+fn point(id: u64, x: f64, y: f64) -> Value {
+    entity("POINT", id, json!({"position": {"x": x, "y": y, "z": 0.0}}))
+}
+
+fn id(n: u64) -> uncad_model::model::EntityId {
+    serde_json::from_value(json!(n)).unwrap()
+}
+
+#[test]
+fn a_stray_entity_that_sets_a_side_is_named() {
+    // A drawing of a few units, and one point a million units out: the box
+    // reaches it, and the side it sets names it.
+    let e = only(&drawing(vec![(
+        "*Model_Space",
+        vec![
+            point(1, 0.0, 0.0),
+            point(2, 10.0, 5.0),
+            point(3, -1_000_000.0, 2.0),
+            point(4, 3.0, 0.0),
+        ],
+    )]));
+    let b = e.bounds.unwrap();
+    assert_eq!(b.min.x, -1_000_000.0);
+    let by = e.bounded_by.expect("a box has sides");
+    assert_eq!(by.min_x, id(3));
+    assert_eq!(by.max_x, id(2));
+    assert_eq!(by.max_y, id(2));
+    // Two points at the lowest y: the lower reference ID.
+    assert_eq!(by.min_y, id(1));
+}
+
+#[test]
+fn a_space_with_no_box_names_no_side() {
+    let e = only(&drawing(vec![("*Model_Space", vec![])]));
+    assert!(e.bounds.is_none());
+    assert!(e.bounded_by.is_none());
+    let json = serde_json::to_value(&e).unwrap();
+    assert!(json.get("bounded_by").is_none(), "{json}");
+}

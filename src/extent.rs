@@ -5,7 +5,7 @@ use crate::geometry::{flat_plane, in_plane, world_angle, world_xy, xy};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uncad_model::bulge;
-use uncad_model::model::Entity;
+use uncad_model::model::{Entity, EntityId};
 use uncad_model::{Affine2, BulgeArc, CadDatabase, Point2D, Point3D};
 
 /// An axis-aligned box, in the drawing's own units.
@@ -41,6 +41,23 @@ pub struct SpaceExtent {
     /// once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_measured: Vec<String>,
+    /// The entity each side of `bounds` is set by -- the one with the
+    /// point farthest out on that side, the lowest reference ID on a tie.
+    /// One stray entity far from the rest sets a side of the box by
+    /// itself; this names it, so a caller can tell the drawing's extent
+    /// from one entity's. `None` exactly when `bounds` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounded_by: Option<BoundedBy>,
+}
+
+/// The entity that sets each side of a [`SpaceExtent`]'s box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct BoundedBy {
+    pub min_x: EntityId,
+    pub min_y: EntityId,
+    pub max_x: EntityId,
+    pub max_y: EntityId,
 }
 
 fn is_space(name: &str) -> bool {
@@ -57,8 +74,15 @@ pub(crate) fn space_extents(db: &CadDatabase) -> Vec<SpaceExtent> {
         .map(|block| {
             let mut points = Vec::new();
             let mut not_measured = BTreeSet::new();
+            // Each entity's own box, to name the one that sets each side.
+            let mut boxes: Vec<(EntityId, Bounds)> = Vec::new();
             for e in &block.entities {
-                if !points_of(e, &mut points) {
+                let from = points.len();
+                if points_of(e, &mut points) {
+                    if let Some(b) = bounds(&points[from..]) {
+                        boxes.push((e.common().id, b));
+                    }
+                } else {
                     not_measured.insert(e.type_name().to_string());
                 }
             }
@@ -66,9 +90,30 @@ pub(crate) fn space_extents(db: &CadDatabase) -> Vec<SpaceExtent> {
                 space: block.name.clone(),
                 bounds: bounds(&points),
                 not_measured: not_measured.into_iter().collect(),
+                bounded_by: bounded_by(&boxes),
             }
         })
         .collect()
+}
+
+/// The entity farthest out on each side, the lowest reference ID on a tie.
+fn bounded_by(boxes: &[(EntityId, Bounds)]) -> Option<BoundedBy> {
+    let side = |key: fn(&Bounds) -> f64, outward: f64| {
+        boxes
+            .iter()
+            .min_by(|(ia, a), (ib, b)| {
+                (outward * key(b))
+                    .total_cmp(&(outward * key(a)))
+                    .then(ia.cmp(ib))
+            })
+            .map(|(id, _)| *id)
+    };
+    Some(BoundedBy {
+        min_x: side(|b| b.min.x, -1.0)?,
+        min_y: side(|b| b.min.y, -1.0)?,
+        max_x: side(|b| b.max.x, 1.0)?,
+        max_y: side(|b| b.max.y, 1.0)?,
+    })
 }
 
 pub(crate) fn bounds(points: &[Point2D]) -> Option<Bounds> {

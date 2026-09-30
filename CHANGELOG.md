@@ -16,6 +16,9 @@ bumps the minor version.
   ID. An entity this crate takes no point from has no box, is left out of a window
   selection, and its type is named in `not_measured`. `Summary` gains `selection`, absent
   unless asked for.
+- `SpaceExtent::bounded_by` names the entity that sets each side of the space's box (the
+  lowest reference ID on a tie), so one stray entity far from the rest is told apart from the
+  drawing's own extent. The box itself is unchanged: every entity measured still counts.
 - `HitTest::limited(n)` keeps the `n` nearest hits; `HitTest` gains `hits_total`, present
   when hits were left out.
 
