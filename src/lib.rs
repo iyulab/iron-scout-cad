@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+mod boundary;
 mod curve;
 mod extent;
 mod geometry;

@@ -107,9 +107,9 @@ pub enum NotSearchedReason {
     /// composed block placement is not a similarity (it scales the axes
     /// differently, or mirrors) for a circle, an arc or a polyline with arc
     /// segments -- a circle would be drawn as an ellipse -- or the circle,
-    /// arc, polyline, text or block reference is written on a plane tilted out of
-    /// the world's (a plane facing up or down, a mirror copy's included, is
-    /// measured). This crate does not guess where it is drawn.
+    /// arc, polyline, text, hatch or block reference is written on a plane
+    /// tilted out of the world's (a plane facing up or down, a mirror copy's
+    /// included, is measured). This crate does not guess where it is drawn.
     NonSimilarPlacement,
     /// Block references nest deeper than the search follows.
     NestingTooDeep,
@@ -120,11 +120,12 @@ pub enum NotSearchedReason {
     /// weights do not make a curve; a LEADER whose path is a spline through
     /// its vertices; an ELLIPSE whose normal names no plane; an ARC whose
     /// start and end angles are equal, which the format leaves as either the
-    /// whole circle or nothing ([`ArcEntity::sweep`](uncad_model::model::ArcEntity::sweep)). The program
-    /// that draws such a curve fits or picks one; this crate does not guess
-    /// which.
+    /// whole circle or nothing ([`ArcEntity::sweep`](uncad_model::model::ArcEntity::sweep)); a HATCH
+    /// with a boundary edge of such a spline. The program that draws such a
+    /// curve fits or picks one; this crate does not guess which.
     CurveUndefined,
-    /// A rational SPLINE -- its weights differ. Its points are known, but
+    /// A rational SPLINE, or a HATCH with a rational spline edge -- its
+    /// weights differ. Its points are known, but
     /// this crate cannot bound how far the curve strays between them, so it
     /// gives no distance rather than one it cannot vouch for.
     CurveBoundUnknown,
@@ -429,6 +430,25 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
                 inside: false,
             }
         }
+        // Its boundary, in its own plane, where the renderer outlines it: a
+        // point inside the area it bounds is enclosed by it.
+        Entity::Hatch(h) => match crate::boundary::hatch(h, t, tolerance) {
+            Err(reason) => Where::NotSearched(reason),
+            Ok(boundary) => match boundary.distance(p) {
+                None => Where::Unsupported,
+                Some(distance) => {
+                    let inside = boundary.contains(p);
+                    match boundary.within {
+                        Some(within) => Where::Chords {
+                            distance,
+                            inside,
+                            within,
+                        },
+                        None => Where::Geometry { distance, inside },
+                    }
+                }
+            },
+        },
         // A construction line, seen from above as a LINE is: from its base
         // point one way (RAY) or both (XLINE). One that runs straight up is
         // its base point in plan.

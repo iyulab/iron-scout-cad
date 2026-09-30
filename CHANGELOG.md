@@ -28,6 +28,11 @@ bumps the minor version.
   inside -- a light's position, and a REGION, 3DSOLID, polyface or polygon mesh whose edges all
   lie at one height. A closed frame encloses the points inside it. A body with depth, and an
   image with no size, stay in `unsupported`.
+- `hit_test` measures a HATCH by its boundary paths, in the hatch's own plane: straight and
+  bulged segments and arc edges exactly, elliptical and spline edges through chords (with
+  `within`), and the area the paths bound -- islands alternating -- encloses the points inside
+  it. A hatch on a tilted plane is `NON_SIMILAR_PLACEMENT`; one with a spline edge the file does
+  not define, or a rational one, is `CURVE_UNDEFINED` or `CURVE_BOUND_UNKNOWN`.
 
 ## [0.2.0] - 2026-09-29
 
