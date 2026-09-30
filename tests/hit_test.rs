@@ -661,3 +661,17 @@ fn a_mirror_copied_text_is_found_where_it_is_drawn() {
     let r = hit_test(&g7(), p(-170.0, -72.0), 0.1);
     assert!(!types_hit(&r).contains(&"TEXT"), "{:?}", r.hits);
 }
+
+#[test]
+fn a_limited_answer_keeps_the_nearest_and_says_how_many_there_were() {
+    let db = g1();
+    let all = hit_test(&db, p(20.0, 20.0), 1000.0);
+    assert!(all.hits.len() > 2, "a wide search finds several");
+    assert_eq!(all.hits_total, None);
+    let two = hit_test(&db, p(20.0, 20.0), 1000.0).limited(2);
+    assert_eq!(two.hits, all.hits[..2]);
+    assert_eq!(two.hits_total, Some(all.hits.len()));
+    // Nothing left out: no total.
+    let same = hit_test(&db, p(20.0, 20.0), 1000.0).limited(all.hits.len());
+    assert_eq!(same.hits_total, None);
+}

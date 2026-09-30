@@ -7,6 +7,18 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `Selection`, `select` and `summarize_with`: a summary can carry the entities picked by
+  type, layer, a window they reach into (crossing), space or reference ID -- each with its
+  layer, space and box (the points the extents are measured by) and, with `with_detail`,
+  its model record. `total` counts every entity kept; `limit` keeps the first by reference
+  ID. An entity this crate takes no point from has no box, is left out of a window
+  selection, and its type is named in `not_measured`. `Summary` gains `selection`, absent
+  unless asked for.
+- `HitTest::limited(n)` keeps the `n` nearest hits; `HitTest` gains `hits_total`, present
+  when hits were left out.
+
 ## [0.2.0] - 2026-09-29
 
 ### Changed

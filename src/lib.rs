@@ -12,7 +12,10 @@
 //! made from. The input is never
 //! modified, and the same drawing gives the same summary, byte for byte.
 //!
-//! The verb set of this crate is these two read-only verbs.
+//! The verb set of this crate is these two read-only verbs. A summary can
+//! also carry a [`Selection`] -- entities picked by type, layer, window,
+//! space or reference ID, each with its box and, on request, its model
+//! record -- a parameter of the summary, not a verb of its own.
 //! `docs/principles.md` section 5 makes a new verb a proposal.
 
 #![forbid(unsafe_code)]
@@ -21,14 +24,16 @@ mod curve;
 mod extent;
 mod geometry;
 mod hit_test;
+mod select;
 mod summary;
 
 pub use extent::{Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason};
+pub use select::{select, Selected, SelectedEntity, Selection, SpaceFilter};
 pub use summary::{
-    plain_text, summarize, AttributeValue, BlockSummary, DimensionSummary, LabelledText,
-    LayerSummary, Lookup, StyleTolerance, Summary, TextRef, TextStack, ToleranceFrame,
-    UnresolvedInsert,
+    plain_text, summarize, summarize_with, AttributeValue, BlockSummary, DimensionSummary,
+    LabelledText, LayerSummary, Lookup, StyleTolerance, Summary, TextRef, TextStack,
+    ToleranceFrame, UnresolvedInsert,
 };
 
 pub use uncad_model::CadDatabase;

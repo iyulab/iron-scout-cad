@@ -71,7 +71,7 @@ pub(crate) fn space_extents(db: &CadDatabase) -> Vec<SpaceExtent> {
         .collect()
 }
 
-fn bounds(points: &[Point2D]) -> Option<Bounds> {
+pub(crate) fn bounds(points: &[Point2D]) -> Option<Bounds> {
     let finite = points.iter().filter(|p| p.x.is_finite() && p.y.is_finite());
     finite.fold(None, |b: Option<Bounds>, p| {
         Some(match b {
@@ -99,7 +99,7 @@ fn arc_reach(arc: &BulgeArc, out: &mut Vec<Point2D>) {
 }
 
 /// Adds the points `e` is measured by to `out`; `false` when it gives none.
-fn points_of(e: &Entity, out: &mut Vec<Point2D>) -> bool {
+pub(crate) fn points_of(e: &Entity, out: &mut Vec<Point2D>) -> bool {
     let before = out.len();
     match e {
         Entity::Line(l) => out.extend([xy(l.start_point), xy(l.end_point)]),

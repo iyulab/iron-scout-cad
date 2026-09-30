@@ -1,6 +1,7 @@
 //! The summary: what a drawing contains, compactly, with nothing guessed.
 
 use crate::extent::SpaceExtent;
+use crate::select::{select, Selected, Selection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uncad_model::model::{
@@ -350,6 +351,10 @@ pub struct Summary {
     /// (see [`SpaceExtent`]).
     #[serde(default)]
     pub extents: Vec<SpaceExtent>,
+    /// The entities a [`Selection`] picked, when the summary was asked for
+    /// one ([`summarize_with`]); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Selected>,
     /// The lowest confidence of any entity summarized; `High` for a drawing
     /// with no entities.
     pub confidence: Confidence,
@@ -390,6 +395,15 @@ fn lookup<'a>(values: impl Iterator<Item = &'a str>) -> Lookup<&'a str> {
         [] => Lookup::Absent,
         [one] => Lookup::Unique(one),
         _ => Lookup::Ambiguous(distinct),
+    }
+}
+
+/// The summary of `db`, with the entities `selection` picks (see
+/// [`crate::select()`]). The input is never modified.
+pub fn summarize_with(db: &CadDatabase, selection: &Selection) -> Summary {
+    Summary {
+        selection: Some(select(db, selection)),
+        ..summarize(db)
     }
 }
 
@@ -487,6 +501,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         dimensions,
         tolerance_frames,
         extents: crate::extent::space_extents(db),
+        selection: None,
         confidence,
         warnings: db.read_diagnostics.warnings.clone(),
     }

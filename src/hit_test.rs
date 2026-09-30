@@ -165,6 +165,23 @@ pub struct HitTest {
     /// its reason, by reference ID then chain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_searched: Vec<NotSearched>,
+    /// How many hits there were before [`HitTest::limited`] kept the
+    /// nearest; absent when nothing was left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hits_total: Option<usize>,
+}
+
+impl HitTest {
+    /// Keeps the `n` nearest hits and says how many there were in
+    /// [`Self::hits_total`] -- a wide search in a dense drawing otherwise
+    /// answers with most of it. `enclosing` and the rest are kept whole.
+    pub fn limited(mut self, n: usize) -> HitTest {
+        if self.hits.len() > n {
+            self.hits_total = Some(self.hits.len());
+            self.hits.truncate(n);
+        }
+        self
+    }
 }
 
 /// Where a point's geometry is, for one entity.
@@ -666,7 +683,7 @@ impl Search<'_> {
 /// The space block each entity of the drawing's own spaces is in: its own
 /// entities, and the attribute values of its block references, which the
 /// model lists at the top level beside them.
-fn spaces(db: &CadDatabase) -> BTreeMap<EntityId, &str> {
+pub(crate) fn spaces(db: &CadDatabase) -> BTreeMap<EntityId, &str> {
     let mut out = BTreeMap::new();
     for record in db.tables.block_records.values() {
         let upper = record.name.to_ascii_uppercase();
@@ -723,5 +740,6 @@ pub fn hit_test(db: &CadDatabase, point: Point2D, tolerance: f64) -> HitTest {
         enclosing,
         unsupported: unsupported.into_iter().collect(),
         not_searched,
+        hits_total: None,
     }
 }
