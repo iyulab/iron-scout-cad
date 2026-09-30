@@ -51,6 +51,9 @@ bumps the minor version.
 
 ### Changed
 
+- A MULTILEADER is pointed at, and boxed, where it is drawn: its lines on to their root's last
+  leader line point, and its doglegs (`uncad-model`'s `MultiLeaderEntity::drawn_lines` and
+  `doglegs`). A multileader whose lines were a single vertex each was `NO_GEOMETRY`.
 - `HitTest::unsupported` names only types this crate does not measure. An entity of a type it
   does measure, but that the model gives nothing to measure -- a polyline with fewer than two
   vertices, a multileader whose every line is a single point, a body with no readable edge, a

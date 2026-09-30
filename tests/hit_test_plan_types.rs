@@ -308,9 +308,30 @@ fn geometry_the_model_does_not_carry_is_named_per_entity() {
         json!({"vertices": [], "closed": false, "const_width": 0.0,
                "elevation": 0.0, "extrusion": xyz(0.0, 0.0, 1.0)}),
     );
-    one("MULTILEADER", json!({"lines": [[xyz(1.0, 2.0, 0.0)]]}));
+    one(
+        "MULTILEADER",
+        json!({"leaders": [{"lines": [[xyz(1.0, 2.0, 0.0)]], "last_point": null, "dogleg": null}]}),
+    );
     one(
         "POLYLINE_3D",
         json!({"vertices": [xyz(1.0, 2.0, 3.0)], "closed": false}),
     );
+}
+
+#[test]
+fn a_multileader_line_runs_on_to_its_roots_last_point_and_dogleg() {
+    // One vertex at the origin, the root's last point at (10, 0), a dogleg
+    // of 2 along +y: drawn as (0,0)-(10,0) and (10,0)-(10,2).
+    let db = drawing(vec![entity(
+        "MULTILEADER",
+        1,
+        json!({"leaders": [{
+            "lines": [[xyz(0.0, 0.0, 0.0)]],
+            "last_point": xyz(10.0, 0.0, 0.0),
+            "dogleg": {"direction": xyz(0.0, 1.0, 0.0), "length": 2.0}
+        }]}),
+    )]);
+    assert_eq!(distances(&db, p(5.0, 0.0), 1e-9), [0.0]);
+    assert_eq!(distances(&db, p(10.0, 1.5), 1e-9), [0.0]);
+    assert!(distances(&db, p(10.0, 3.0), 0.5).is_empty());
 }

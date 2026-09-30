@@ -434,10 +434,14 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
             chords(p, curve::ellipse(el, t, tolerance), full)
         }
         Entity::Spline(s) => chords(p, curve::spline(s, t, tolerance), false),
+        // Where the model says it is drawn: each line on to its root's last
+        // leader line point, and each dogleg.
         Entity::MultiLeader(m) => {
+            let doglegs = m.doglegs().into_iter().map(Vec::from);
             let distance = m
-                .lines
-                .iter()
+                .drawn_lines()
+                .into_iter()
+                .chain(doglegs)
                 .map(|line| line.iter().map(|&v| at(xy(v))).collect::<Vec<_>>())
                 .filter_map(|line| straight_distance(p, &line, false))
                 .reduce(f64::min);

@@ -304,7 +304,10 @@ pub(crate) fn points_of(e: &Entity, tables: &Tables, out: &mut Vec<Point2D>) -> 
             None => out.extend(s.fit_points.iter().map(|&c| xy(c))),
         },
         Entity::Leader(l) => out.extend(l.vertices.iter().map(|&v| xy(v))),
-        Entity::MultiLeader(m) => out.extend(m.lines.iter().flatten().map(|&v| xy(v))),
+        Entity::MultiLeader(m) => {
+            out.extend(m.drawn_lines().iter().flatten().map(|&v| xy(v)));
+            out.extend(m.doglegs().iter().flatten().map(|&v| xy(v)));
+        }
         Entity::Polyline3D(p) => out.extend(p.vertices.iter().map(|&v| xy(v))),
         Entity::Image(i) => out.extend(image_frame(i).unwrap_or_default()),
         Entity::Light(l) => out.push(xy(l.position)),
