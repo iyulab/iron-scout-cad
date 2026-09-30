@@ -62,6 +62,45 @@ pub(crate) fn distance_to_segment(p: Point2D, a: Point2D, b: Point2D) -> f64 {
     )
 }
 
+/// Distance from `p` to the line through `a` towards `b`: from `a` on only
+/// when `from_a` (a ray), both ways otherwise. A line with no direction
+/// (`a` = `b`) is the point `a`.
+pub(crate) fn distance_to_line(p: Point2D, a: Point2D, b: Point2D, from_a: bool) -> f64 {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let len2 = dx * dx + dy * dy;
+    if len2 == 0.0 {
+        return distance(p, a);
+    }
+    let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+    let t = if from_a { t.max(0.0) } else { t };
+    distance(
+        p,
+        Point2D {
+            x: a.x + t * dx,
+            y: a.y + t * dy,
+        },
+    )
+}
+
+/// Whether wireframe edges lie in one plane parallel to the world's: every
+/// z the same, give or take rounding against the size of the profile (with
+/// a floor of 1). Such a profile is drawn seen from above; one with depth is
+/// not, and has no plan position to point at. `false` for no edges.
+pub(crate) fn flat_in_xy(edges: &[[Point3D; 2]]) -> bool {
+    let (mut lo_z, mut hi_z) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for p in edges.iter().flatten() {
+        lo_z = lo_z.min(p.z);
+        hi_z = hi_z.max(p.z);
+        lo = lo.min(p.x).min(p.y);
+        hi = hi.max(p.x).max(p.y);
+    }
+    if !lo_z.is_finite() {
+        return false;
+    }
+    (hi_z - lo_z) <= 1e-9 * (hi - lo).max(1.0)
+}
+
 /// Distance from `p` to a polyline's segments, each straight or the arc
 /// its bulge describes. `None` when there are no segments (fewer than two
 /// vertices).

@@ -21,6 +21,13 @@ bumps the minor version.
   drawing's own extent. The box itself is unchanged: every entity measured still counts.
 - `HitTest::limited(n)` keeps the `n` nearest hits; `HitTest` gains `hits_total`, present
   when hits were left out.
+- `hit_test` measures more of what a drawing shows in plan, where it was listed in
+  `unsupported` before: a RAY from its base point one way and an XLINE both ways (one that runs
+  straight up is its base point), a 3D polyline seen from above, a viewport's frame on its
+  sheet, a raster image's frame -- or its clip boundary, when clipping is on and keeps what is
+  inside -- a light's position, and a REGION, 3DSOLID, polyface or polygon mesh whose edges all
+  lie at one height. A closed frame encloses the points inside it. A body with depth, and an
+  image with no size, stay in `unsupported`.
 
 ## [0.2.0] - 2026-09-29
 

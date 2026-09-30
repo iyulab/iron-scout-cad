@@ -16,14 +16,15 @@
 
 use crate::curve::{self, Curve};
 use crate::geometry::{
-    distance, distance_to_arc, distance_to_segment, distance_to_segments, flat_plane, in_plane,
-    shape_contains, world_angle, world_xy, xy,
+    distance, distance_to_arc, distance_to_line, distance_to_segment, distance_to_segments,
+    flat_in_xy, flat_plane, in_plane, shape_contains, world_angle, world_xy, xy,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
-    Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderPath, Ref,
+    Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, ImageEntity,
+    LeaderPath, Ref,
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
@@ -428,8 +429,111 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
                 inside: false,
             }
         }
+        // A construction line, seen from above as a LINE is: from its base
+        // point one way (RAY) or both (XLINE). One that runs straight up is
+        // its base point in plan.
+        Entity::Ray(r) | Entity::XLine(r) => {
+            let base = at(xy(r.point));
+            let toward = at(Point2D {
+                x: r.point.x + r.vector.x,
+                y: r.point.y + r.vector.y,
+            });
+            Where::Geometry {
+                distance: distance_to_line(p, base, toward, matches!(entity, Entity::Ray(_))),
+                inside: false,
+            }
+        }
+        // Where the light is, as a POINT is where it is: its target is where
+        // it aims, not where it sits.
+        Entity::Light(l) => Where::Geometry {
+            distance: distance(p, at(xy(l.position))),
+            inside: false,
+        },
+        // Its vertices are world coordinates; seen from above, as a LINE is.
+        Entity::Polyline3D(pl) => {
+            let vertices: Vec<Point2D> = pl.vertices.iter().map(|&v| at(xy(v))).collect();
+            outline(p, &vertices, pl.closed)
+        }
+        // The frame on the sheet; what it shows of the model is not searched
+        // here -- that is model space, with coordinates of its own.
+        Entity::Viewport(v) => {
+            let (hw, hh) = (v.width / 2.0, v.height / 2.0);
+            let corner = |sx: f64, sy: f64| {
+                at(Point2D {
+                    x: v.center.x + sx * hw,
+                    y: v.center.y + sy * hh,
+                })
+            };
+            outline(
+                p,
+                &[
+                    corner(-1.0, -1.0),
+                    corner(1.0, -1.0),
+                    corner(1.0, 1.0),
+                    corner(-1.0, 1.0),
+                ],
+                true,
+            )
+        }
+        Entity::Image(i) => {
+            let frame = image_outline(i);
+            if enclosed_area(&frame) == 0.0 {
+                return Where::Unsupported;
+            }
+            let frame: Vec<Point2D> = frame.into_iter().map(at).collect();
+            outline(p, &frame, true)
+        }
+        // A profile in one plane parallel to the world's is drawn seen from
+        // above. One with depth is drawn in a projection whose coordinates
+        // are not the drawing's, so there is nothing in plan to point at.
+        Entity::Solid3D(s)
+        | Entity::Region(s)
+        | Entity::PolylinePFace(s)
+        | Entity::PolylineMesh(s)
+            if flat_in_xy(&s.wireframe_edges) =>
+        {
+            let distance = s
+                .wireframe_edges
+                .iter()
+                .map(|[a, b]| distance_to_segment(p, at(xy(*a)), at(xy(*b))))
+                .fold(f64::INFINITY, f64::min);
+            Where::Geometry {
+                distance,
+                inside: false,
+            }
+        }
         _ => Where::Unsupported,
     }
+}
+
+/// Where a raster image sits: its clip boundary when clipping is on and
+/// keeps what is inside it, otherwise the whole image's frame -- the
+/// pixel-to-world mapping [`ImageEntity`] states, taken to its four
+/// corners.
+fn image_outline(i: &ImageEntity) -> Vec<Point2D> {
+    if i.clipping == Some(true) && i.clip_outside != Some(true) && i.boundary.len() >= 3 {
+        return i.boundary.clone();
+    }
+    let (o, u, v) = (i.insertion_point, i.u_vector, i.v_vector);
+    let (w, h) = (i.size_pixels.x, i.size_pixels.y);
+    let at = |a: f64, b: f64| Point2D {
+        x: o.x + a * u.x + b * v.x,
+        y: o.y + a * u.y + b * v.y,
+    };
+    vec![at(0.0, 0.0), at(w, 0.0), at(w, h), at(0.0, h)]
+}
+
+/// Twice the area a closed outline encloses, unsigned: `0` for fewer than
+/// three points or points on one line.
+fn enclosed_area(points: &[Point2D]) -> f64 {
+    let n = points.len();
+    (0..n)
+        .map(|k| {
+            let (a, b) = (points[k], points[(k + 1) % n]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum::<f64>()
+        .abs()
 }
 
 /// A curve's chords as a [`Where`]: a closed one encloses what lies inside
