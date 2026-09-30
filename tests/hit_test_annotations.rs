@@ -231,10 +231,12 @@ fn a_straight_leader_is_hit_along_its_segments() {
 
 #[test]
 fn a_leader_whose_path_the_file_does_not_state_is_not_measured() {
+    // Straight or a spline through the vertices: the file does not say.
     let db = leader(Value::Null);
     let r = hit_test(&db, p(15.0, 10.0), 1e-9);
-    assert!(r.hits.is_empty(), "{r:?}");
-    assert_eq!(r.unsupported, ["LEADER"]);
+    assert!(r.hits.is_empty() && r.unsupported.is_empty(), "{r:?}");
+    assert_eq!(r.not_searched.len(), 1, "{r:?}");
+    assert_eq!(r.not_searched[0].reason, NotSearchedReason::CurveUndefined);
 }
 
 #[test]

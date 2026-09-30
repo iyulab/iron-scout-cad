@@ -2,6 +2,8 @@
 //! lines, 3D polylines, a viewport's frame, a raster image's frame, and a
 //! body whose profile lies flat. Each is measured where it is drawn, seen
 //! from above; a body with depth is not in plan, and stays unsupported.
+//! One of these that the model gives nothing to measure -- no vertices, no
+//! edges, a frame enclosing nothing -- is not searched, with that reason.
 
 use iron_scout_cad::hit_test;
 use serde_json::{json, Value};
@@ -48,6 +50,17 @@ fn line(kind: &str) -> CadDatabase {
         1,
         json!({"point": xyz(10.0, 0.0, 0.0), "vector": xyz(1.0, 0.0, 0.0)}),
     )])
+}
+
+/// The entity is not searched because the model gives it nothing to
+/// measure -- its type is not unsupported.
+fn assert_no_geometry(r: &iron_scout_cad::HitTest) {
+    assert!(r.hits.is_empty() && r.unsupported.is_empty(), "{r:?}");
+    assert_eq!(r.not_searched.len(), 1, "{r:?}");
+    assert_eq!(
+        r.not_searched[0].reason,
+        iron_scout_cad::NotSearchedReason::NoGeometry
+    );
 }
 
 fn distances(db: &CadDatabase, at: Point2D, tolerance: f64) -> Vec<f64> {
@@ -187,7 +200,7 @@ fn an_image_with_no_size_is_not_measured() {
             "boundary": []
         }),
     )]);
-    assert_eq!(hit_test(&db, p(0.0, 0.0), 1.0).unsupported, ["IMAGE"]);
+    assert_no_geometry(&hit_test(&db, p(0.0, 0.0), 1.0));
 }
 
 fn body(kind: &str, z_far: f64) -> CadDatabase {
@@ -229,7 +242,7 @@ fn a_body_with_no_edges_is_not_measured() {
         1,
         json!({"wireframe_edges": [], "skipped_edges": 3}),
     )]);
-    assert_eq!(hit_test(&db, p(0.0, 0.0), 1.0).unsupported, ["3DSOLID"]);
+    assert_no_geometry(&hit_test(&db, p(0.0, 0.0), 1.0));
 }
 
 #[test]
@@ -279,4 +292,25 @@ fn a_light_is_where_it_sits_not_where_it_aims() {
     )]);
     assert_eq!(distances(&db, p(2.0, 3.0), 1e-9), [0.0]);
     assert!(distances(&db, p(20.0, 3.0), 1.0).is_empty());
+}
+
+#[test]
+fn geometry_the_model_does_not_carry_is_named_per_entity() {
+    // A 2D polyline with no vertex, a multileader whose one line is a single
+    // point, a 3D polyline of one vertex: each type is measured, but not
+    // these entities.
+    let one = |kind: &str, fields: Value| {
+        let db = drawing(vec![entity(kind, 1, fields)]);
+        assert_no_geometry(&hit_test(&db, p(0.0, 0.0), 1.0));
+    };
+    one(
+        "POLYLINE_2D",
+        json!({"vertices": [], "closed": false, "const_width": 0.0,
+               "elevation": 0.0, "extrusion": xyz(0.0, 0.0, 1.0)}),
+    );
+    one("MULTILEADER", json!({"lines": [[xyz(1.0, 2.0, 0.0)]]}));
+    one(
+        "POLYLINE_3D",
+        json!({"vertices": [xyz(1.0, 2.0, 3.0)], "closed": false}),
+    );
 }

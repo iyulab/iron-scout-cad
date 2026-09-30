@@ -43,6 +43,16 @@ bumps the minor version.
   polyline's vertices and a body's edges when they lie at one height -- so what can be pointed
   at can also be found by where it is. A RAY or XLINE still has no box: it has no end.
 
+### Changed
+
+- `HitTest::unsupported` names only types this crate does not measure. An entity of a type it
+  does measure, but that the model gives nothing to measure -- a polyline with fewer than two
+  vertices, a multileader whose every line is a single point, a body with no readable edge, a
+  hatch with no boundary segment, an image frame that encloses nothing -- is listed in
+  `not_searched` with the new reason `NO_GEOMETRY`, instead of its type in `unsupported`. A
+  LEADER that does not say whether its path is straight or a spline is `CURVE_UNDEFINED`,
+  like a spline one.
+
 ## [0.2.0] - 2026-09-29
 
 ### Changed

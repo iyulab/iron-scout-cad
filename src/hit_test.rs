@@ -119,7 +119,8 @@ pub enum NotSearchedReason {
     /// The file does not define the curve to measure: a SPLINE stored only
     /// by the points it passes through, or whose control points, knots and
     /// weights do not make a curve; a LEADER whose path is a spline through
-    /// its vertices; an ELLIPSE whose normal names no plane; an ARC whose
+    /// its vertices, or that does not say whether its path is straight or a
+    /// spline; an ELLIPSE whose normal names no plane; an ARC whose
     /// start and end angles are equal, which the format leaves as either the
     /// whole circle or nothing ([`ArcEntity::sweep`](uncad_model::model::ArcEntity::sweep)); a HATCH
     /// with a boundary edge of such a spline. The program that draws such a
@@ -134,6 +135,13 @@ pub enum NotSearchedReason {
     /// whose scale the model was not given: the style's offsets, at that
     /// scale, are where its lines run, and this crate does not guess them.
     StyleUndefined,
+    /// The model gives this entity nothing to measure: a polyline with
+    /// fewer than two vertices, a multileader whose every line has fewer
+    /// than two points, a body none of whose edges could be read, a hatch
+    /// with no boundary segment, a raster image whose frame encloses
+    /// nothing. The type is one this crate measures; this entity carries
+    /// no geometry for it -- the reader's diagnostics may say why.
+    NoGeometry,
 }
 
 /// An entity, or a block reference's contents, that the search did not
@@ -166,7 +174,9 @@ pub struct HitTest {
     pub enclosing: Vec<Hit>,
     /// Entity types present in the drawing that this crate cannot
     /// hit-test yet, so that "no hit" is never silently "not looked at".
-    /// Sorted, each once.
+    /// Sorted, each once. An entity of a type this crate does measure, but
+    /// that cannot be measured itself, is in `not_searched` instead, with
+    /// its reason.
     pub unsupported: Vec<String>,
     /// Entities and block contents the search did not look at, each with
     /// its reason, by reference ID then chain.
@@ -327,7 +337,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
                     distance,
                     inside: pl.closed && shape_contains(p, &segments),
                 },
-                None => Where::Unsupported,
+                None => Where::NotSearched(NotSearchedReason::NoGeometry),
             }
         }
         Entity::Point(pt) => Where::Geometry {
@@ -413,9 +423,10 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
             let vertices: Vec<Point2D> = l.vertices.iter().map(|&v| at(xy(v))).collect();
             outline(p, &vertices, false)
         }
-        Entity::Leader(l) if l.path_type == Some(LeaderPath::Spline) => {
-            Where::NotSearched(NotSearchedReason::CurveUndefined)
-        }
+        // A spline path is fitted through the vertices by the program that
+        // draws it, and a path whose kind the file does not state could be
+        // either.
+        Entity::Leader(_) => Where::NotSearched(NotSearchedReason::CurveUndefined),
         // Seen from above, as a LINE is: the curve's points are world
         // coordinates, so a tilted plane needs no plane of its own here.
         Entity::Ellipse(el) => {
@@ -423,16 +434,19 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
             chords(p, curve::ellipse(el, t, tolerance), full)
         }
         Entity::Spline(s) => chords(p, curve::spline(s, t, tolerance), false),
-        Entity::MultiLeader(m) if m.lines.iter().any(|line| line.len() >= 2) => {
+        Entity::MultiLeader(m) => {
             let distance = m
                 .lines
                 .iter()
                 .map(|line| line.iter().map(|&v| at(xy(v))).collect::<Vec<_>>())
                 .filter_map(|line| straight_distance(p, &line, false))
-                .fold(f64::INFINITY, f64::min);
-            Where::Geometry {
-                distance,
-                inside: false,
+                .reduce(f64::min);
+            match distance {
+                Some(distance) => Where::Geometry {
+                    distance,
+                    inside: false,
+                },
+                None => Where::NotSearched(NotSearchedReason::NoGeometry),
             }
         }
         // Its boundary, in its own plane, where the renderer outlines it: a
@@ -440,7 +454,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
         Entity::Hatch(h) => match crate::boundary::hatch(h, t, tolerance) {
             Err(reason) => Where::NotSearched(reason),
             Ok(boundary) => match boundary.distance(p) {
-                None => Where::Unsupported,
+                None => Where::NotSearched(NotSearchedReason::NoGeometry),
                 Some(distance) => {
                     let inside = boundary.contains(p);
                     match boundary.within {
@@ -505,11 +519,19 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
                 let frame: Vec<Point2D> = frame.into_iter().map(at).collect();
                 outline(p, &frame, true)
             }
-            None => Where::Unsupported,
+            None => Where::NotSearched(NotSearchedReason::NoGeometry),
         },
         // A profile in one plane parallel to the world's is drawn seen from
         // above. One with depth is drawn in a projection whose coordinates
         // are not the drawing's, so there is nothing in plan to point at.
+        Entity::Solid3D(s)
+        | Entity::Region(s)
+        | Entity::PolylinePFace(s)
+        | Entity::PolylineMesh(s)
+            if s.wireframe_edges.is_empty() =>
+        {
+            Where::NotSearched(NotSearchedReason::NoGeometry)
+        }
         Entity::Solid3D(s)
         | Entity::Region(s)
         | Entity::PolylinePFace(s)
@@ -559,8 +581,8 @@ fn straight_distance(p: Point2D, points: &[Point2D], closed: bool) -> Option<f64
 }
 
 /// The straight outline through `points` as a [`Where`]: a closed outline
-/// encloses what lies inside it. Fewer than two points draw nothing this
-/// crate can measure.
+/// encloses what lies inside it. Fewer than two points give nothing to
+/// measure.
 fn outline(p: Point2D, points: &[Point2D], closed: bool) -> Where {
     let vertices: Vec<PolylineVertex> = points
         .iter()
@@ -572,7 +594,7 @@ fn outline(p: Point2D, points: &[Point2D], closed: bool) -> Where {
             distance,
             inside: closed && shape_contains(p, &segments),
         },
-        None => Where::Unsupported,
+        None => Where::NotSearched(NotSearchedReason::NoGeometry),
     }
 }
 
@@ -728,7 +750,7 @@ impl Search<'_> {
                 distance,
                 inside: false,
             },
-            None => Where::Unsupported,
+            None => Where::NotSearched(NotSearchedReason::NoGeometry),
         }
     }
 
