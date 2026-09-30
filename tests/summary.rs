@@ -373,6 +373,39 @@ fn a_tolerance_is_carried_from_the_style_the_overrides_and_the_text_alike() {
     assert_eq!(d(304).tolerance_overrides, None);
 }
 
+/// The factor a dimension's measurement is scaled by (DIMLFAC) is the one in
+/// force for it: its style's, or its own override -- and not known when its
+/// style is not in the table or its overrides were not read.
+#[test]
+fn a_dimension_carries_the_length_factor_in_force_for_it() {
+    use uncad_model::model::{OverrideValue, StyleOverride};
+    let mut v: serde_json::Value =
+        serde_json::from_str(include_str!("golden/g5.expected.json")).unwrap();
+    v["tables"]["dim_styles"]["ISO-25"]["length_factor"] = 25.4.into();
+    let dims = v["entities"].as_array_mut().unwrap();
+    let dim = |dims: &mut Vec<serde_json::Value>, id: u64| {
+        dims.iter().position(|e| e["common"]["id"] == id).unwrap()
+    };
+    let at = dim(dims, 298);
+    dims[at]["style_overrides"] = serde_json::to_value(vec![StyleOverride {
+        variable: 144,
+        value: OverrideValue::Real(0.5),
+    }])
+    .unwrap();
+    let at = dim(dims, 304);
+    dims[at]["style_overrides"] = serde_json::Value::Null;
+    let db: CadDatabase = serde_json::from_value(v).unwrap();
+
+    let s = summarize(&db);
+    let d = |id: u64| s.dimensions.iter().find(|d| d.id.value() == id).unwrap();
+    // The style's factor, and the dimension's own override of it.
+    assert_eq!(d(299).length_factor, Some(25.4));
+    assert_eq!(d(298).length_factor, Some(0.5));
+    // No style to read it from, and overrides not read: not known.
+    assert_eq!(d(302).length_factor, None);
+    assert_eq!(d(304).length_factor, None);
+}
+
 /// A feature control frame is listed with its text as written -- two rows,
 /// the symbol-font switch, `%%v` between cells -- and that text with its
 /// MTEXT codes read; what the symbol and the cells mean is not read.

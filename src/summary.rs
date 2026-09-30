@@ -166,6 +166,16 @@ pub struct DimensionSummary {
     /// `\S+0.1^-0.05;` is a tolerance written into the text itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_stacks: Vec<TextStack>,
+    /// DIMLFAC in force for this dimension -- its style's (DXF 144), or its
+    /// own override of it: the factor the drawing's distance is multiplied
+    /// by for the measurement it shows, so that a drawing measured in one
+    /// unit can be dimensioned in another. `None` when [`Self::style`]
+    /// names no style of the drawing's table, when the reader did not read
+    /// the dimension's overrides (whether it overrides the factor is then
+    /// not known), or when neither states it -- see the model's
+    /// `DimStyleRecord` for what the format means by an unwritten value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_factor: Option<f64>,
     pub confidence: Confidence,
 }
 
@@ -274,6 +284,12 @@ impl DimensionSummary {
                     .collect()
             }),
             text_stacks,
+            length_factor: d
+                .style_name
+                .resolved()
+                .and_then(|name| tables.dim_styles.get(name))
+                .zip(d.style_overrides.as_ref())
+                .and_then(|(style, overrides)| style.overridden(overrides).length_factor),
             confidence: d.common.confidence,
         }
     }

@@ -42,6 +42,10 @@ bumps the minor version.
   control points), an MLINE's lines, a raster image's frame, a light's position, a 3D
   polyline's vertices and a body's edges when they lie at one height -- so what can be pointed
   at can also be found by where it is. A RAY or XLINE still has no box: it has no end.
+- `DimensionSummary::length_factor`: the DIMLFAC in force for the dimension -- its style's, or
+  its own override -- the factor its drawing distance is multiplied by for the measurement it
+  shows. Absent when the style is not in the drawing or the dimension's overrides were not
+  read.
 
 ### Changed
 
