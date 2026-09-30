@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-01
+
 ### Added
 
 - `Selection`, `select` and `summarize_with`: a summary can carry the entities picked by
