@@ -7,12 +7,19 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-02
+
 ### Added
 
 - `Summary::units`: the unit the drawing's header states, as a `DrawingUnits` (the
   `$INSUNITS` code and the name the DXF reference gives it, `"du"` for unitless or an
   undefined code); `None` -- `null` in JSON, always present -- when the header states none.
   Needs `uncad-model`'s `CadDatabase::header`.
+
+### Changed
+
+- Built on `uncad-model` 0.3.0 (its lower bound was 0.2.1): a multileader is pointed at
+  along the lines its leader roots draw, and a summary reads the drawing's `header`.
 
 ## [0.3.0] - 2026-10-01
 
