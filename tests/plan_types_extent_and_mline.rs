@@ -40,6 +40,7 @@ fn model_space(entities: Vec<Value>) -> CadDatabase {
     let mut db = CadDatabase {
         entities: entities.clone(),
         tables: Default::default(),
+        header: Default::default(),
         read_diagnostics: Default::default(),
     };
     db.tables.block_records.insert(

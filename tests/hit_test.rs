@@ -349,6 +349,7 @@ fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
     let mut db = CadDatabase {
         entities: vec![insert],
         tables: Default::default(),
+        header: Default::default(),
         read_diagnostics: Default::default(),
     };
     db.tables.block_records.insert(
@@ -452,6 +453,7 @@ fn a_block_that_references_itself_ends_with_the_depth_reported() {
     let mut db = CadDatabase {
         entities: vec![refer(1)],
         tables: Default::default(),
+        header: Default::default(),
         read_diagnostics: Default::default(),
     };
     db.tables.block_records.insert(

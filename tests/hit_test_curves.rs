@@ -28,6 +28,7 @@ fn drawing(entities: Vec<Value>) -> CadDatabase {
     CadDatabase {
         entities: serde_json::from_value(Value::Array(entities)).expect("the entities deserialize"),
         tables: Default::default(),
+        header: Default::default(),
         read_diagnostics: Default::default(),
     }
 }

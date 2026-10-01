@@ -27,6 +27,7 @@ fn drawing(spaces: Vec<(&str, Vec<Value>)>) -> CadDatabase {
     let mut db = CadDatabase {
         entities: Vec::new(),
         tables: Default::default(),
+        header: Default::default(),
         read_diagnostics: Default::default(),
     };
     for (name, entities) in spaces {

@@ -50,6 +50,7 @@ fn hatch_in(paths: Vec<Value>, extrusion: (f64, f64, f64)) -> CadDatabase {
     CadDatabase {
         entities: serde_json::from_value(json!([e])).expect("the hatch deserializes"),
         tables: Default::default(),
+        header: Default::default(),
         read_diagnostics: Default::default(),
     }
 }
