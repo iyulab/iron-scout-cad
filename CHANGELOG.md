@@ -7,6 +7,13 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `Summary::units`: the unit the drawing's header states, as a `DrawingUnits` (the
+  `$INSUNITS` code and the name the DXF reference gives it, `"du"` for unitless or an
+  undefined code); `None` -- `null` in JSON, always present -- when the header states none.
+  Needs `uncad-model`'s `CadDatabase::header`.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added

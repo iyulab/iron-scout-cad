@@ -33,7 +33,7 @@ pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason};
 pub use select::{select, Selected, SelectedEntity, Selection, SpaceFilter};
 pub use summary::{
     plain_text, summarize, summarize_with, AttributeValue, BlockSummary, DimensionSummary,
-    LabelledText, LayerSummary, Lookup, StyleTolerance, Summary, TextRef, TextStack,
+    DrawingUnits, LabelledText, LayerSummary, Lookup, StyleTolerance, Summary, TextRef, TextStack,
     ToleranceFrame, UnresolvedInsert,
 };
 

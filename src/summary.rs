@@ -9,7 +9,7 @@ use uncad_model::model::{
 };
 use uncad_model::tables::Tables;
 use uncad_model::text::TextKind;
-use uncad_model::{CadDatabase, Ocs, Point2D};
+use uncad_model::{CadDatabase, Ocs, Point2D, Units};
 
 /// A layer and how much of the drawing is on it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -322,10 +322,28 @@ pub enum Lookup<T> {
     Ambiguous(Vec<T>),
 }
 
+/// The unit the drawing's header states for its numbers (`$INSUNITS`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DrawingUnits {
+    /// The code as the file states it.
+    pub code: u16,
+    /// The unit the code names in the DXF reference's table: `"mm"`, `"in"`,
+    /// `"m"`, ... -- or `"du"` ("drawing units") for code 0 (unitless) and
+    /// for a code the table does not define.
+    pub name: String,
+}
+
 /// What a drawing contains.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Summary {
+    /// The unit the drawing's coordinates and measurements are in, as its
+    /// header states it; `None` when the header does not say -- a unit is
+    /// never assumed. The summary's coordinates, and the lengths measured
+    /// from them, are in this unit.
+    #[serde(default)]
+    pub units: Option<DrawingUnits>,
     /// Top-level entities (model and paper space), as the model lists them.
     pub entity_count: usize,
     /// Count per entity type name, by name.
@@ -506,6 +524,10 @@ pub fn summarize(db: &CadDatabase) -> Summary {
 
     let (labelled_texts, unplaced_texts) = labelled_texts(db);
     Summary {
+        units: db.header.insunits.map(|code| DrawingUnits {
+            code,
+            name: Units::from_insunits(code).name,
+        }),
         entity_count: db.entities.len(),
         by_type,
         layers,

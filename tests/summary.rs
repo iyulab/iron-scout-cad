@@ -140,6 +140,28 @@ fn the_summary_serializes_with_the_lookup_in_the_models_convention() {
     assert_eq!(json, r#"{"type":"ABSENT"}"#);
 }
 
+#[test]
+fn the_units_are_the_ones_the_header_states_and_unknown_otherwise() {
+    // G1's header states $INSUNITS 4.
+    let s = summarize(&g1());
+    let units = s.units.as_ref().expect("G1 states its units");
+    assert_eq!((units.code, units.name.as_str()), (4, "mm"));
+    let json = serde_json::to_value(&s).unwrap();
+    assert_eq!(json["units"], serde_json::json!({"code": 4, "name": "mm"}));
+
+    // G9's header states none: the summary says so instead of assuming one.
+    let s = summarize(&g9());
+    assert_eq!(s.units, None);
+    let json = serde_json::to_value(&s).unwrap();
+    assert!(json["units"].is_null() && json.get("units").is_some());
+
+    // A code the DXF reference does not define is kept, named "du".
+    let mut db = g9();
+    db.header.insunits = Some(99);
+    let units = summarize(&db).units.unwrap();
+    assert_eq!((units.code, units.name.as_str()), (99, "du"));
+}
+
 /// G7 with a second text drawn exactly on top of its value `target`, under
 /// a fresh reference ID.
 fn g7_with_a_text_over(target: &str, text: &str) -> CadDatabase {
