@@ -25,6 +25,7 @@ mod curve;
 mod extent;
 mod geometry;
 mod hit_test;
+mod limits;
 mod select;
 mod signature;
 mod summary;

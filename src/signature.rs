@@ -17,6 +17,12 @@
 //! components. Anything else that draws but is not measured here is counted
 //! by type in [`Signature::not_measured`].
 //!
+//! Expansion is bounded, as a drawing's block references may nest or fan out
+//! without end: a reference inside 20 others is not followed, nor is one
+//! whose block would take the walk past ten million entities met inside
+//! expanded blocks. Each such reference is counted in `not_measured`, so a
+//! signature short of what the drawing holds says so.
+//!
 //! # Quantization (`signature_version` 1)
 //!
 //! - A length is taken to millimetres through the unit the header states and
@@ -40,6 +46,7 @@ use uncad_model::model::{DimensionKind, Entity, InsertEntity};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, Ocs, Point2D, Point3D};
 
+use crate::limits::{Expansion, MAX_BLOCK_REF_DEPTH};
 use crate::summary::DimensionSummary;
 
 /// The quantization this crate's signatures follow; see the module doc. A
@@ -77,10 +84,15 @@ pub struct Signature {
     /// name and how many references.
     pub excluded_inserts: BTreeMap<String, u64>,
     /// What draws but was not measured: an entity type the signature does
-    /// not measure (`UNKNOWN` for every type the model has no shape for), a circle or arc under a scale that differs between axes
+    /// not measure (`UNKNOWN` for every type the model has no shape for), a
+    /// circle or arc under a scale that differs between axes
     /// (`CIRCLE_NON_UNIFORM_SCALE`, ...), a reference to a block the drawing
     /// does not hold or one that contains itself (`INSERT_UNRESOLVED`,
-    /// `INSERT_CYCLE`).
+    /// `INSERT_CYCLE`), and a reference not expanded because it sits inside
+    /// 20 others (`INSERT_TOO_DEEP`) or because its block would take the
+    /// count past ten million entities met inside expanded blocks
+    /// (`INSERT_BUDGET_EXHAUSTED`). Either of the last two means the other
+    /// components are short of what the drawing holds.
     pub not_measured: BTreeMap<String, u64>,
 }
 
@@ -115,6 +127,7 @@ pub fn signature(db: &CadDatabase) -> Signature {
         excluded: BTreeMap::new(),
         not_measured: BTreeMap::new(),
         open_blocks: Vec::new(),
+        expansion: Expansion::default(),
     };
     let model = db
         .tables
@@ -207,10 +220,18 @@ struct Counter<'a> {
     /// The blocks being expanded, outermost first: a reference to one of
     /// them would never end.
     open_blocks: Vec<String>,
+    expansion: Expansion,
 }
 
 fn bump(map: &mut BTreeMap<String, u64>, key: &str) {
-    *map.entry(key.to_string()).or_insert(0) += 1;
+    // A key is met once per entity and is almost always there already; only
+    // the first meeting allocates it.
+    match map.get_mut(key) {
+        Some(n) => *n += 1,
+        None => {
+            map.insert(key.to_string(), 1);
+        }
+    }
 }
 
 impl Counter<'_> {
@@ -334,10 +355,18 @@ impl Counter<'_> {
             bump(&mut self.not_measured, "INSERT_CYCLE");
             return;
         }
+        if self.open_blocks.len() >= MAX_BLOCK_REF_DEPTH {
+            bump(&mut self.not_measured, "INSERT_TOO_DEEP");
+            return;
+        }
         let Some(inner) = at.then(i) else {
             bump(&mut self.not_measured, "INSERT");
             return;
         };
+        if !self.expansion.take(block.entities.len()) {
+            bump(&mut self.not_measured, "INSERT_BUDGET_EXHAUSTED");
+            return;
+        }
         self.open_blocks.push(name.to_string());
         self.walk(&block.entities, &inner);
         self.open_blocks.pop();

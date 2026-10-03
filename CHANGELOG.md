@@ -14,10 +14,18 @@ bumps the minor version.
   integers: geometry by type, circle diameters in micrometres, line lengths and arc radii in
   power-of-two millimetre bins, dimensions by kind, where dimensions state a tolerance, and what
   was not measured. Length components are absent when the header states no unit. The
-  quantization is versioned (`signature_version` 1).
+  quantization is versioned (`signature_version` 1). Expansion is bounded: a reference nested
+  inside 20 others (`INSERT_TOO_DEEP`), or whose block would take the walk past ten million
+  entities met inside expanded blocks (`INSERT_BUDGET_EXHAUSTED`), is not followed and is counted
+  as not measured.
 
 ### Changed
 
+- The hit test's budget for following block references counts the entities met inside the
+  blocks it expands (ten million in one call) instead of the references followed (a million): a
+  block of many entities placed many times no longer runs unbounded. A block that does not fit
+  in what is left is not entered (`BLOCK_REFERENCE_BUDGET_EXHAUSTED`); a reference whose
+  placement is not measured no longer spends the budget.
 - A MULTILEADER whose lines are a spline, or of a type the model does not know, is not
   searched (`CURVE_UNDEFINED`), as a LEADER's spline path already was. Lines of no type are not
   measured and not part of the extent; the doglegs still are.
@@ -81,6 +89,11 @@ bumps the minor version.
 
 ### Changed
 
+- The hit test's budget for following block references counts the entities met inside the
+  blocks it expands (ten million in one call) instead of the references followed (a million): a
+  block of many entities placed many times no longer runs unbounded. A block that does not fit
+  in what is left is not entered (`BLOCK_REFERENCE_BUDGET_EXHAUSTED`); a reference whose
+  placement is not measured no longer spends the budget.
 - A MULTILEADER is pointed at, and boxed, where it is drawn: its lines on to their root's last
   leader line point, and its doglegs (`uncad-model`'s `MultiLeaderEntity::drawn_lines` and
   `doglegs`). A multileader whose lines were a single vertex each was `NO_GEOMETRY`.

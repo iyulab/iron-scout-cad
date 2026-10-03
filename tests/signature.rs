@@ -198,3 +198,62 @@ fn dimension_kinds_are_named_as_the_model_spells_them() {
         );
     }
 }
+
+/// A chain of `depth` block definitions, each placing the next `fan` times,
+/// the last holding one circle; model space places the first once.
+fn nested(depth: usize, fan: usize) -> CadDatabase {
+    let mut db = g1();
+    let hole = model_space(&mut db)
+        .iter()
+        .find(|e| matches!(e, Entity::Circle(_)))
+        .cloned()
+        .unwrap();
+    let reference = model_space(&mut db)
+        .iter()
+        .find_map(|e| match e {
+            Entity::Insert(i) => Some(i.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let template = db.tables.block_records["TITLEBLOCK"].clone();
+    let place = |name: String| {
+        let mut i = reference.clone();
+        i.attribs.clear();
+        i.block_name = uncad_model::model::Ref::Resolved(name);
+        Entity::Insert(i)
+    };
+    for level in 0..depth {
+        let mut block = template.clone();
+        block.entities = if level + 1 == depth {
+            vec![hole.clone()]
+        } else {
+            (0..fan).map(|_| place(format!("L{}", level + 1))).collect()
+        };
+        db.tables.block_records.insert(format!("L{level}"), block);
+    }
+    let space = model_space(&mut db);
+    space.clear();
+    space.push(place("L0".to_string()));
+    db
+}
+
+#[test]
+fn nesting_deeper_than_the_limit_stops_and_says_so() {
+    let s = signature(&nested(64, 1));
+    assert_eq!(s.not_measured.get("INSERT_TOO_DEEP"), Some(&1));
+    assert_eq!(s.entities.get("CIRCLE"), None);
+}
+
+#[test]
+fn a_reference_chain_that_multiplies_stops_at_the_budget_and_says_so() {
+    // 10 levels placing the next 10 times each would be 10^9 circles; the
+    // walk meets at most ten million entities inside expanded blocks.
+    let s = signature(&nested(10, 10));
+    assert!(
+        s.not_measured.contains_key("INSERT_BUDGET_EXHAUSTED"),
+        "{:?}",
+        s.not_measured
+    );
+    let circles = s.entities.get("CIRCLE").copied().unwrap_or(0);
+    assert!(circles > 0 && circles < 10_000_000, "{circles}");
+}

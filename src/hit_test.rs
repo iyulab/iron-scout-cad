@@ -29,16 +29,7 @@ use uncad_model::model::{
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
-/// How deep block references may nest before the search stops following
-/// them. Real drawings nest a few levels; a definition that references
-/// itself would otherwise never end.
-const MAX_BLOCK_REF_DEPTH: usize = 20;
-
-/// How many block references one hit test follows in total, across every
-/// level. The depth cap bounds nesting but not breadth: many INSERTs per
-/// block at every level fan out combinatorially long before the depth cap
-/// engages.
-const BLOCK_REF_BUDGET: usize = 1_000_000;
+use crate::limits::{Expansion, MAX_BLOCK_REF_DEPTH};
 
 /// One entity at the point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,9 +103,11 @@ pub enum NotSearchedReason {
     /// tilted out of the world's (a plane facing up or down, a mirror copy's
     /// included, is measured). This crate does not guess where it is drawn.
     NonSimilarPlacement,
-    /// Block references nest deeper than the search follows.
+    /// The block reference sits inside 20 others, deeper than the search
+    /// follows.
     NestingTooDeep,
-    /// The search followed as many block references as it allows in one call.
+    /// The block would take the search past the ten million entities it
+    /// meets inside expanded blocks in one call.
     BlockReferenceBudgetExhausted,
     /// The file does not define the curve to measure: a SPLINE stored only
     /// by the points it passes through, or whose control points, knots and
@@ -624,8 +617,8 @@ struct Search<'a> {
     enclosing: Vec<Hit>,
     unsupported: BTreeSet<String>,
     not_searched: Vec<NotSearched>,
-    /// Block references followed so far, across every level.
-    followed: usize,
+    /// What the search has spent of its expansion budget.
+    expansion: Expansion,
     /// How many of the block references on the current path are marked
     /// invisible.
     hidden_refs: usize,
@@ -818,11 +811,6 @@ impl Search<'_> {
                 .push(not(NotSearchedReason::NestingTooDeep));
             return;
         }
-        if self.followed >= BLOCK_REF_BUDGET {
-            self.not_searched
-                .push(not(NotSearchedReason::BlockReferenceBudgetExhausted));
-            return;
-        }
         // A block placed in a plane tilted out of the world's has no exact
         // 2D placement, so its contents are not measured -- and said so.
         let Some(own) = insert.world_transform(block.base_point) else {
@@ -830,7 +818,11 @@ impl Search<'_> {
                 .push(not(NotSearchedReason::NonSimilarPlacement));
             return;
         };
-        self.followed += 1;
+        if !self.expansion.take(block.entities.len()) {
+            self.not_searched
+                .push(not(NotSearchedReason::BlockReferenceBudgetExhausted));
+            return;
+        }
         let placed = own.then(t);
         let hides = usize::from(insert.common.invisible);
         self.hidden_refs += hides;
@@ -876,7 +868,7 @@ pub fn hit_test(db: &CadDatabase, point: Point2D, tolerance: f64) -> HitTest {
         enclosing: Vec::new(),
         unsupported: BTreeSet::new(),
         not_searched: Vec::new(),
-        followed: 0,
+        expansion: Expansion::default(),
         hidden_refs: 0,
         spaces: spaces(db),
     };
