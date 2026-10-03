@@ -261,7 +261,7 @@ fn a_multileader_is_hit_on_its_leader_lines() {
             "lines": [[xyz(0.0, 0.0), xyz(5.0, 5.0)], [xyz(0.0, 10.0), xyz(5.0, 5.0)]],
             "last_point": null,
             "dogleg": null
-        }]}),
+        }], "line_type": "STRAIGHT"}),
     )]);
     assert_eq!(hit_test(&db, p(2.5, 7.5), 1e-9).hits.len(), 1);
     assert!(hit_test(&db, p(5.0, 0.0), 1e-9).hits.is_empty());

@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
-    Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderPath,
-    MLineEntity, Ref,
+    Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderLineType,
+    LeaderPath, MLineEntity, Ref,
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
@@ -434,12 +434,26 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
             chords(p, curve::ellipse(el, t, tolerance), full)
         }
         Entity::Spline(s) => chords(p, curve::spline(s, t, tolerance), false),
+        // A spline is fitted through the points by the program that draws
+        // it, and a type the model does not know could be either -- as for
+        // a LEADER's path.
+        Entity::MultiLeader(m)
+            if !matches!(
+                m.line_type,
+                Some(LeaderLineType::Straight | LeaderLineType::Invisible)
+            ) && !m.drawn_lines().is_empty() =>
+        {
+            Where::NotSearched(NotSearchedReason::CurveUndefined)
+        }
         // Where the model says it is drawn: each line on to its root's last
-        // leader line point, and each dogleg.
+        // leader line point, unless the lines have no type, and each dogleg.
         Entity::MultiLeader(m) => {
             let doglegs = m.doglegs().into_iter().map(Vec::from);
-            let distance = m
-                .drawn_lines()
+            let lines = match m.line_type {
+                Some(LeaderLineType::Invisible) => Vec::new(),
+                _ => m.drawn_lines(),
+            };
+            let distance = lines
                 .into_iter()
                 .chain(doglegs)
                 .map(|line| line.iter().map(|&v| at(xy(v))).collect::<Vec<_>>())

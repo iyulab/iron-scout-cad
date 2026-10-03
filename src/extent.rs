@@ -8,7 +8,7 @@ use crate::geometry::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uncad_model::bulge;
-use uncad_model::model::{Entity, EntityId};
+use uncad_model::model::{Entity, EntityId, LeaderLineType};
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, BulgeArc, CadDatabase, Point2D, Point3D};
 
@@ -305,7 +305,10 @@ pub(crate) fn points_of(e: &Entity, tables: &Tables, out: &mut Vec<Point2D>) -> 
         },
         Entity::Leader(l) => out.extend(l.vertices.iter().map(|&v| xy(v))),
         Entity::MultiLeader(m) => {
-            out.extend(m.drawn_lines().iter().flatten().map(|&v| xy(v)));
+            // Lines of no type are not drawn.
+            if m.line_type != Some(LeaderLineType::Invisible) {
+                out.extend(m.drawn_lines().iter().flatten().map(|&v| xy(v)));
+            }
             out.extend(m.doglegs().iter().flatten().map(|&v| xy(v)));
         }
         Entity::Polyline3D(p) => out.extend(p.vertices.iter().map(|&v| xy(v))),

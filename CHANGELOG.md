@@ -7,6 +7,13 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Changed
+
+- A MULTILEADER whose lines are a spline, or of a type the model does not know, is not
+  searched (`CURVE_UNDEFINED`), as a LEADER's spline path already was. Lines of no type are not
+  measured and not part of the extent; the doglegs still are.
+
+
 ## [0.4.0] - 2026-10-02
 
 ### Added

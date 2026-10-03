@@ -5,7 +5,7 @@
 //! One of these that the model gives nothing to measure -- no vertices, no
 //! edges, a frame enclosing nothing -- is not searched, with that reason.
 
-use iron_scout_cad::hit_test;
+use iron_scout_cad::{hit_test, NotSearchedReason};
 use serde_json::{json, Value};
 use uncad_model::tables::BlockRecord;
 use uncad_model::{CadDatabase, Point2D};
@@ -323,16 +323,43 @@ fn geometry_the_model_does_not_carry_is_named_per_entity() {
 fn a_multileader_line_runs_on_to_its_roots_last_point_and_dogleg() {
     // One vertex at the origin, the root's last point at (10, 0), a dogleg
     // of 2 along +y: drawn as (0,0)-(10,0) and (10,0)-(10,2).
-    let db = drawing(vec![entity(
+    let db = multileader("STRAIGHT");
+    assert_eq!(distances(&db, p(5.0, 0.0), 1e-9), [0.0]);
+    assert_eq!(distances(&db, p(10.0, 1.5), 1e-9), [0.0]);
+    assert!(distances(&db, p(10.0, 3.0), 0.5).is_empty());
+}
+
+/// The multileader of the test above, its lines of `line_type` (`""`: a
+/// type the model does not know).
+fn multileader(line_type: &str) -> CadDatabase {
+    let line_type = if line_type.is_empty() {
+        Value::Null
+    } else {
+        json!(line_type)
+    };
+    drawing(vec![entity(
         "MULTILEADER",
         1,
         json!({"leaders": [{
             "lines": [[xyz(0.0, 0.0, 0.0)]],
             "last_point": xyz(10.0, 0.0, 0.0),
             "dogleg": {"direction": xyz(0.0, 1.0, 0.0), "length": 2.0}
-        }]}),
-    )]);
-    assert_eq!(distances(&db, p(5.0, 0.0), 1e-9), [0.0]);
+        }], "line_type": line_type}),
+    )])
+}
+
+#[test]
+fn a_multileader_line_is_measured_only_as_its_line_type_draws_it() {
+    // A spline is fitted through the points by the program that draws it,
+    // and a type the model does not know could be either: not searched.
+    for line_type in ["SPLINE", ""] {
+        let r = hit_test(&multileader(line_type), p(5.0, 0.0), 1.0);
+        assert!(r.hits.is_empty(), "{r:?}");
+        assert_eq!(r.not_searched.len(), 1, "{r:?}");
+        assert_eq!(r.not_searched[0].reason, NotSearchedReason::CurveUndefined);
+    }
+    // Lines of no type are not drawn; the dogleg still is.
+    let db = multileader("INVISIBLE");
+    assert!(distances(&db, p(5.0, 0.0), 1e-9).is_empty());
     assert_eq!(distances(&db, p(10.0, 1.5), 1e-9), [0.0]);
-    assert!(distances(&db, p(10.0, 3.0), 0.5).is_empty());
 }
