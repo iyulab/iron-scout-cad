@@ -2,6 +2,7 @@
 
 use crate::extent::SpaceExtent;
 use crate::select::{select, Selected, Selection};
+use crate::signature::{signature, Signature};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uncad_model::model::{
@@ -234,7 +235,7 @@ pub struct ToleranceFrame {
 const TOLERANCE_VARIABLES: [u16; 5] = [71, 72, 47, 48, 272];
 
 impl DimensionSummary {
-    fn of(d: &DimensionEntity, tables: &Tables) -> Self {
+    pub(crate) fn of(d: &DimensionEntity, tables: &Tables) -> Self {
         use uncad_model::text::{tokens, Token};
         let literal = match &d.text_override {
             TextOverride::Literal(text) => Some(text.as_str()),
@@ -385,6 +386,9 @@ pub struct Summary {
     /// (see [`SpaceExtent`]).
     #[serde(default)]
     pub extents: Vec<SpaceExtent>,
+    /// The drawing's shape signature: what its model space draws, counted
+    /// into integers whose places each have a meaning (see [`Signature`]).
+    pub signature: Signature,
     /// The entities a [`Selection`] picked, when the summary was asked for
     /// one ([`summarize_with`]); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -539,6 +543,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         dimensions,
         tolerance_frames,
         extents: crate::extent::space_extents(db),
+        signature: signature(db),
         selection: None,
         confidence,
         warnings: db.read_diagnostics.warnings.clone(),

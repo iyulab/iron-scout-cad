@@ -7,6 +7,15 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `Summary::signature` and `signature(&db)`: the drawing's shape signature -- what model space
+  draws, block references expanded (those carrying attributes left out and named), counted into
+  integers: geometry by type, circle diameters in micrometres, line lengths and arc radii in
+  power-of-two millimetre bins, dimensions by kind, where dimensions state a tolerance, and what
+  was not measured. Length components are absent when the header states no unit. The
+  quantization is versioned (`signature_version` 1).
+
 ### Changed
 
 - A MULTILEADER whose lines are a spline, or of a type the model does not know, is not

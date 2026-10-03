@@ -26,11 +26,13 @@ mod extent;
 mod geometry;
 mod hit_test;
 mod select;
+mod signature;
 mod summary;
 
 pub use extent::{BoundedBy, Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason};
 pub use select::{select, Selected, SelectedEntity, Selection, SpaceFilter};
+pub use signature::{signature, Signature, ToleranceCounts, SIGNATURE_VERSION};
 pub use summary::{
     plain_text, summarize, summarize_with, AttributeValue, BlockSummary, DimensionSummary,
     DrawingUnits, LabelledText, LayerSummary, Lookup, StyleTolerance, Summary, TextRef, TextStack,
