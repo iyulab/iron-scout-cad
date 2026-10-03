@@ -141,6 +141,38 @@ fn the_summary_serializes_with_the_lookup_in_the_models_convention() {
 }
 
 #[test]
+fn the_drawing_ids_are_the_ones_the_header_states_and_unknown_otherwise() {
+    // The golden G1 states no GUIDs: both are unknown, not empty.
+    let s = summarize(&g1());
+    assert_eq!(
+        (
+            s.drawing_ids.fingerprint.as_deref(),
+            s.drawing_ids.version.as_deref()
+        ),
+        (None, None)
+    );
+    let json = serde_json::to_value(&s).unwrap();
+    assert_eq!(
+        json["drawing_ids"],
+        serde_json::json!({"fingerprint": null, "version": null})
+    );
+
+    // Stated, they are given as stated, braces and case included.
+    let mut db = g1();
+    db.header.fingerprintguid = Some("{FDEAD578-a652-11D2-9A35-0060089B3A3F}".into());
+    db.header.versionguid = Some("{0F2B7A1C-0000-0000-0000-000000000001}".into());
+    let s = summarize(&db);
+    assert_eq!(
+        s.drawing_ids.fingerprint.as_deref(),
+        Some("{FDEAD578-a652-11D2-9A35-0060089B3A3F}")
+    );
+    assert_eq!(
+        s.drawing_ids.version.as_deref(),
+        Some("{0F2B7A1C-0000-0000-0000-000000000001}")
+    );
+}
+
+#[test]
 fn the_units_are_the_ones_the_header_states_and_unknown_otherwise() {
     // G1's header states $INSUNITS 4.
     let s = summarize(&g1());

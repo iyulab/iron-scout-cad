@@ -36,8 +36,8 @@ pub use select::{select, Selected, SelectedEntity, Selection, SpaceFilter};
 pub use signature::{signature, Signature, ToleranceCounts, SIGNATURE_VERSION};
 pub use summary::{
     plain_text, summarize, summarize_with, AttributeValue, BlockSummary, DimensionSummary,
-    DrawingUnits, LabelledText, LayerSummary, Lookup, StyleTolerance, Summary, TextRef, TextStack,
-    ToleranceFrame, UnresolvedInsert,
+    DrawingIds, DrawingUnits, LabelledText, LayerSummary, Lookup, StyleTolerance, Summary, TextRef,
+    TextStack, ToleranceFrame, UnresolvedInsert,
 };
 
 pub use uncad_model::CadDatabase;

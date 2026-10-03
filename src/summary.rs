@@ -335,6 +335,25 @@ pub struct DrawingUnits {
     pub name: String,
 }
 
+/// The identifiers a drawing's header states for where it came from and
+/// which saved state it is, as stated (braces included) -- to ask whether two
+/// files are one drawing before comparing them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DrawingIds {
+    /// `$FINGERPRINTGUID`: given when the drawing was created and kept
+    /// through every later save -- also by a drawing created as a copy of it,
+    /// or from the same template, so two unrelated drawings can state the
+    /// same value. It says where a drawing came from, not which drawing it
+    /// is: a different value is strong evidence of two drawings, the same
+    /// value only weak evidence of one. `None` when the header does not
+    /// state it.
+    pub fingerprint: Option<String>,
+    /// `$VERSIONGUID`: the drawing's state as of a save, given anew when a
+    /// save changes it. `None` when the header does not state it.
+    pub version: Option<String>,
+}
+
 /// What a drawing contains.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -345,6 +364,10 @@ pub struct Summary {
     /// from them, are in this unit.
     #[serde(default)]
     pub units: Option<DrawingUnits>,
+    /// The identifiers the header states for the drawing's origin and saved
+    /// state; each `None` when not stated.
+    #[serde(default)]
+    pub drawing_ids: DrawingIds,
     /// Top-level entities (model and paper space), as the model lists them.
     pub entity_count: usize,
     /// Count per entity type name, by name.
@@ -532,6 +555,10 @@ pub fn summarize(db: &CadDatabase) -> Summary {
             code,
             name: Units::from_insunits(code).name,
         }),
+        drawing_ids: DrawingIds {
+            fingerprint: db.header.fingerprintguid.clone(),
+            version: db.header.versionguid.clone(),
+        },
         entity_count: db.entities.len(),
         by_type,
         layers,

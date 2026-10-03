@@ -9,6 +9,10 @@ bumps the minor version.
 
 ### Added
 
+- `Summary::drawing_ids` (`DrawingIds`): the header's `$FINGERPRINTGUID` and `$VERSIONGUID`
+  as stated, each absent when not stated -- to ask whether two files are one drawing before
+  comparing them. The fingerprint is kept by copies and by drawings made from one template: it
+  says where a drawing came from, not which drawing it is.
 - `Summary::signature` and `signature(&db)`: the drawing's shape signature -- what model space
   draws, block references expanded (those carrying attributes left out and named), counted into
   integers: geometry by type, circle diameters in micrometres, line lengths and arc radii in
