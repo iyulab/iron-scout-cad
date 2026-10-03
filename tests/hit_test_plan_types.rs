@@ -147,6 +147,33 @@ fn a_viewport_is_its_frame_and_encloses_what_it_frames() {
     assert_eq!(inside.enclosing[0].distance, 40.0);
 }
 
+#[test]
+fn a_layouts_overall_viewport_is_the_sheet_and_never_a_hit() {
+    // Numbered 1 (a DXF), or unnumbered with a view that is itself (the
+    // binary format stores no number): the sheet as paper space shows it.
+    // It would enclose every point of the sheet, so it is not searched --
+    // and is not "not searched" either, since it is not drawn on the sheet.
+    let itself = json!({"center": {"x": 50.0, "y": 40.0}, "height": 80.0,
+                        "target": xyz(0.0, 0.0, 0.0), "direction": xyz(0.0, 0.0, 1.0),
+                        "twist": 0.0, "lens_length": 50.0});
+    for (id, view) in [(json!(1), Value::Null), (Value::Null, itself)] {
+        let db = drawing(vec![entity(
+            "VIEWPORT",
+            1,
+            json!({
+                "center": xyz(50.0, 40.0, 0.0), "width": 100.0, "height": 80.0,
+                "view": view, "on": true, "viewport_id": id
+            }),
+        )]);
+        for (point, tolerance) in [(p(50.0, 40.0), 1.0), (p(100.0, 40.0), 1e-9)] {
+            let at = hit_test(&db, point, tolerance);
+            assert!(at.hits.is_empty(), "{id}: {:?}", at.hits);
+            assert!(at.enclosing.is_empty(), "{id}: {:?}", at.enclosing);
+            assert!(at.not_searched.is_empty(), "{id}: {:?}", at.not_searched);
+        }
+    }
+}
+
 fn image(clipping: Option<bool>, boundary: Value) -> CadDatabase {
     // 100 x 50 pixels, each 0.1 units: a 10 x 5 frame from (20, 30).
     drawing(vec![entity(

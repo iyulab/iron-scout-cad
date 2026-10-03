@@ -13,6 +13,11 @@
 //! reached through, since the same definition entity can sit at several
 //! places in the drawing. What could not be searched is said so, with the
 //! reason.
+//!
+//! A layout's overall viewport is not searched: it is the sheet itself as
+//! paper space shows it, not something drawn on the sheet, so it would
+//! enclose every point of the sheet and say nothing. Its windows onto the
+//! model -- the other viewports -- are searched like any closed frame.
 
 use crate::curve::{self, Curve};
 use crate::geometry::{
@@ -25,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
     Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderLineType,
-    LeaderPath, MLineEntity, Ref,
+    LeaderPath, MLineEntity, Ref, ViewportEntity,
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
@@ -212,6 +217,8 @@ enum Where {
     Anchor(f64),
     Unsupported,
     NotSearched(NotSearchedReason),
+    /// Not an element at all: a layout's overall viewport, the sheet itself.
+    Sheet,
 }
 
 /// Distance from `p` to where a line of text is anchored, placed through
@@ -506,6 +513,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
         }
         // The frame on the sheet; what it shows of the model is not searched
         // here -- that is model space, with coordinates of its own.
+        Entity::Viewport(v) if is_overall(v) => Where::Sheet,
         Entity::Viewport(v) => {
             let (hw, hh) = (v.width / 2.0, v.height / 2.0);
             let corner = |sx: f64, sy: f64| {
@@ -560,6 +568,25 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
             }
         }
         _ => Where::Unsupported,
+    }
+}
+
+/// Whether `vp` is its layout's overall viewport: the sheet as paper space
+/// shows it, not a window onto the model. The DXF numbers it 1; the binary
+/// format stores no number, and a DXF from R2000 on writes 0 for every
+/// viewport of a layout that is not the current one -- no number either.
+/// Without one it is the viewport whose view is itself: as tall as its
+/// frame, centred on the frame's centre, untwisted.
+fn is_overall(vp: &ViewportEntity) -> bool {
+    match vp.viewport_id {
+        Some(id) if id > 0 => id == 1,
+        _ => vp.view.is_some_and(|view| {
+            let tol = 1e-6 * vp.height.abs().max(1.0);
+            (view.height - vp.height).abs() < tol
+                && (view.center.x - vp.center.x).abs() < tol
+                && (view.center.y - vp.center.y).abs() < tol
+                && view.twist.abs() < 1e-9
+        }),
     }
 }
 
@@ -683,6 +710,7 @@ impl Search<'_> {
                     reason,
                     space: space.clone(),
                 }),
+                Where::Sheet => {}
             }
             if let Entity::Insert(insert) = entity {
                 self.follow(insert, t, via);
@@ -725,7 +753,7 @@ impl Search<'_> {
                     distance, within, ..
                 } => Some((distance, false, Some(within))),
                 Where::Anchor(distance) => Some((distance, true, None)),
-                Where::Unsupported | Where::NotSearched(_) => None,
+                Where::Unsupported | Where::NotSearched(_) | Where::Sheet => None,
             })
             .chain(built_on)
             .fold(text, nearer);
