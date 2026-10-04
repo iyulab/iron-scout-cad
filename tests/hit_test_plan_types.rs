@@ -401,7 +401,8 @@ fn multileader_with_text(line_type: &str) -> CadDatabase {
         "location": xyz(14.0, 3.0, 0.0),
         "direction": xyz(1.0, 0.0, 0.0),
         "extrusion": xyz(0.0, 0.0, 1.0),
-        "height": 2.5, "rotation": 0.0, "width": 0.0, "scale": 1.0,
+        "height": 2.5, "line_spacing_factor": 1.0, "rotation": 0.0, "width": 0.0,
+        "scale": 1.0,
         "attachment": "TOP_LEFT"
     }});
     db.entities[0] = serde_json::from_value(leader).unwrap();
