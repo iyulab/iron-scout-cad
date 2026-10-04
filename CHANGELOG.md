@@ -37,6 +37,9 @@ bumps the minor version.
 - A MULTILEADER whose lines are a spline, or of a type the model does not know, is not
   searched (`CURVE_UNDEFINED`), as a LEADER's spline path already was. Lines of no type are not
   measured and not part of the extent; the doglegs still are.
+- A layout's overall viewport -- the sheet as paper space shows it, not something drawn on it --
+  is neither hit nor enclosing in a hit test, and is not listed as unsearched: as a closed frame
+  it enclosed every point of the sheet. The other viewports are searched as before.
 
 
 ## [0.4.0] - 2026-10-02
