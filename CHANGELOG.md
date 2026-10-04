@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-04
+
 ### Added
 
 - A MULTILEADER is found at what it points out: its text's or block's location is an anchor, as an
@@ -40,7 +42,8 @@ bumps the minor version.
 - A layout's overall viewport -- the sheet as paper space shows it, not something drawn on it --
   is neither hit nor enclosing in a hit test, and is not listed as unsearched: as a closed frame
   it enclosed every point of the sheet. The other viewports are searched as before.
-
+- Built on `uncad-model` 0.4.0 (a multileader's line type and content; the header's drawing
+  identifiers).
 
 ## [0.4.0] - 2026-10-02
 
