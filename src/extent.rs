@@ -8,7 +8,7 @@ use crate::geometry::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uncad_model::bulge;
-use uncad_model::model::{Entity, EntityId, LeaderLineType};
+use uncad_model::model::{Entity, EntityId, LeaderLineType, MultiLeaderContent};
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, BulgeArc, CadDatabase, Point2D, Point3D};
 
@@ -310,6 +310,13 @@ pub(crate) fn points_of(e: &Entity, tables: &Tables, out: &mut Vec<Point2D>) -> 
                 out.extend(m.drawn_lines().iter().flatten().map(|&v| xy(v)));
             }
             out.extend(m.doglegs().iter().flatten().map(|&v| xy(v)));
+            // Where what it points out is placed, as an MTEXT's insertion
+            // point or a block reference's is.
+            match &m.content {
+                Some(MultiLeaderContent::MText(t)) => out.push(xy(t.location)),
+                Some(MultiLeaderContent::Block(b)) => out.push(xy(b.location)),
+                None => {}
+            }
         }
         Entity::Polyline3D(p) => out.extend(p.vertices.iter().map(|&v| xy(v))),
         Entity::Image(i) => out.extend(image_frame(i).unwrap_or_default()),

@@ -9,6 +9,10 @@ bumps the minor version.
 
 ### Added
 
+- A MULTILEADER is found at what it points out: its text's or block's location is an anchor, as an
+  MTEXT's insertion point is, and a point nearer it than the leader lines meets the multileader
+  there -- also when its lines are a curve the file does not define, which is not searched. The
+  location counts in the drawing's extent.
 - `Summary::drawing_ids` (`DrawingIds`): the header's `$FINGERPRINTGUID` and `$VERSIONGUID`
   as stated, each absent when not stated -- to ask whether two files are one drawing before
   comparing them. The fingerprint is kept by copies and by drawings made from one template: it

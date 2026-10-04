@@ -390,3 +390,37 @@ fn a_multileader_line_is_measured_only_as_its_line_type_draws_it() {
     assert!(distances(&db, p(5.0, 0.0), 1e-9).is_empty());
     assert_eq!(distances(&db, p(10.0, 1.5), 1e-9), [0.0]);
 }
+
+/// The multileader of the tests above pointing out a text at (14, 3).
+fn multileader_with_text(line_type: &str) -> CadDatabase {
+    let mut db = multileader(line_type);
+    let mut leader = serde_json::to_value(&db.entities[0]).unwrap();
+    leader["content"] = json!({"type": "MTEXT", "data": {
+        "text": "%%c10 THRU",
+        "style_name": {"type": "ABSENT"},
+        "location": xyz(14.0, 3.0, 0.0),
+        "direction": xyz(1.0, 0.0, 0.0),
+        "extrusion": xyz(0.0, 0.0, 1.0),
+        "height": 2.5, "rotation": 0.0, "width": 0.0, "scale": 1.0,
+        "attachment": "TOP_LEFT"
+    }});
+    db.entities[0] = serde_json::from_value(leader).unwrap();
+    db
+}
+
+#[test]
+fn a_multileader_is_found_at_what_it_points_out() {
+    // At the text's location: the anchor, nearer than the lines.
+    let db = multileader_with_text("STRAIGHT");
+    let r = hit_test(&db, p(14.0, 3.0), 0.5);
+    assert_eq!(r.hits.len(), 1, "{r:?}");
+    assert_eq!(r.hits[0].distance, 0.0, "{r:?}");
+    // On the leader line the line is nearer: found as before.
+    assert_eq!(distances(&db, p(5.0, 0.0), 1e-9), [0.0]);
+    // Lines whose curve is not defined are not searched, but the text the
+    // picture draws is still found where it is.
+    let db = multileader_with_text("SPLINE");
+    let r = hit_test(&db, p(14.0, 3.0), 0.5);
+    assert_eq!(r.hits.len(), 1, "{r:?}");
+    assert!(r.not_searched.is_empty(), "{r:?}");
+}

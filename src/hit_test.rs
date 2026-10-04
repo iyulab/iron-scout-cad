@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
     Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderLineType,
-    LeaderPath, MLineEntity, Ref, ViewportEntity,
+    LeaderPath, MLineEntity, MultiLeaderContent, Ref, ViewportEntity,
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
@@ -219,6 +219,15 @@ enum Where {
     NotSearched(NotSearchedReason),
     /// Not an element at all: a layout's overall viewport, the sheet itself.
     Sheet,
+}
+
+/// Where what a MULTILEADER points out is placed, in world coordinates: its
+/// text's or its block's location.
+fn multileader_content_at(m: &uncad_model::model::MultiLeaderEntity) -> Option<Point3D> {
+    match m.content.as_ref()? {
+        MultiLeaderContent::MText(t) => Some(t.location),
+        MultiLeaderContent::Block(b) => Some(b.location),
+    }
 }
 
 /// Distance from `p` to where a line of text is anchored, placed through
@@ -436,14 +445,18 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
         Entity::Spline(s) => chords(p, curve::spline(s, t, tolerance), false),
         // A spline is fitted through the points by the program that draws
         // it, and a type the model does not know could be either -- as for
-        // a LEADER's path.
+        // a LEADER's path. What it points out is still where the record
+        // says, and is found there.
         Entity::MultiLeader(m)
             if !matches!(
                 m.line_type,
                 Some(LeaderLineType::Straight | LeaderLineType::Invisible)
             ) && !m.drawn_lines().is_empty() =>
         {
-            Where::NotSearched(NotSearchedReason::CurveUndefined)
+            match multileader_content_at(m) {
+                Some(c) => Where::Anchor(distance(p, at(xy(c)))),
+                None => Where::NotSearched(NotSearchedReason::CurveUndefined),
+            }
         }
         // Where the model says it is drawn: each line on to its root's last
         // leader line point, unless the lines have no type, and each dogleg.
@@ -453,18 +466,24 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
                 Some(LeaderLineType::Invisible) => Vec::new(),
                 _ => m.drawn_lines(),
             };
-            let distance = lines
+            let lines = lines
                 .into_iter()
                 .chain(doglegs)
                 .map(|line| line.iter().map(|&v| at(xy(v))).collect::<Vec<_>>())
                 .filter_map(|line| straight_distance(p, &line, false))
                 .reduce(f64::min);
-            match distance {
-                Some(distance) => Where::Geometry {
+            // What it points out is anchored where the record places it, as
+            // an MTEXT's text or a block reference's block is: the nearer of
+            // the lines and that anchor is where the point meets it.
+            let content = multileader_content_at(m).map(|c| distance(p, at(xy(c))));
+            match (lines, content) {
+                (Some(d), Some(a)) if a < d => Where::Anchor(a),
+                (Some(distance), _) => Where::Geometry {
                     distance,
                     inside: false,
                 },
-                None => Where::NotSearched(NotSearchedReason::NoGeometry),
+                (None, Some(a)) => Where::Anchor(a),
+                (None, None) => Where::NotSearched(NotSearchedReason::NoGeometry),
             }
         }
         // Its boundary, in its own plane, where the renderer outlines it: a
