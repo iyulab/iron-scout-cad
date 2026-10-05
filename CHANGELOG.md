@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-05
+
 ### Added
 
 - `Summary::tables`: every table (ACAD_TABLE) of the drawing's own spaces, by reference ID -- where
@@ -22,6 +24,8 @@ bumps the minor version.
   point, and what its block draws -- the lines and texts of its cells -- is hit through it (`via`
   names the table), placed as the table places it. A table is no longer listed as `unsupported`;
   one naming a block the drawing lacks is listed in `not_searched` with its reason.
+
+- Built on `uncad-model` 0.5.0 (a table's grid).
 
 ## [0.5.0] - 2026-10-04
 
