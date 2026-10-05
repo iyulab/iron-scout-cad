@@ -35,9 +35,9 @@ pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason};
 pub use select::{select, Selected, SelectedEntity, Selection, SpaceFilter};
 pub use signature::{signature, Signature, ToleranceCounts, SIGNATURE_VERSION};
 pub use summary::{
-    plain_text, summarize, summarize_with, AttributeValue, BlockSummary, DimensionSummary,
-    DrawingIds, DrawingUnits, LabelledText, LayerSummary, Lookup, StyleTolerance, Summary, TextRef,
-    TextStack, ToleranceFrame, UnresolvedInsert,
+    plain_text, summarize, summarize_with, AttributeValue, BlockSummary, CellText,
+    DimensionSummary, DrawingIds, DrawingUnits, LabelledText, LayerSummary, Lookup, StyleTolerance,
+    Summary, TableCells, TableSummary, TextRef, TextStack, ToleranceFrame, UnresolvedInsert,
 };
 
 pub use uncad_model::CadDatabase;

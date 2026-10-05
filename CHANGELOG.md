@@ -7,6 +7,22 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `Summary::tables`: every table (ACAD_TABLE) of the drawing's own spaces, by reference ID -- where
+  it is inserted, the block that draws it, and its cells (`TableCells`: the row and column counts
+  and every cell with text, by row and column, as written and as plain text, with its span).
+  `cells` is `None` when the drawing's reader did not read the table's cells, so a table whose
+  contents are unknown does not read as an empty one. Absent from the JSON when the drawing has no
+  table.
+
+### Changed
+
+- `hit_test` searches a table as the block reference it is: the table is found at its insertion
+  point, and what its block draws -- the lines and texts of its cells -- is hit through it (`via`
+  names the table), placed as the table places it. A table is no longer listed as `unsupported`;
+  one naming a block the drawing lacks is listed in `not_searched` with its reason.
+
 ## [0.5.0] - 2026-10-04
 
 ### Added

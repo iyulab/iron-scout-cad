@@ -9,10 +9,11 @@
 //!
 //! What a block reference draws is searched too: each entity of the block
 //! definition is placed through the INSERT's transform (nested references
-//! compose), and a hit inside a block names the chain of INSERTs it was
+//! compose), and a hit inside a block names the chain of references it was
 //! reached through, since the same definition entity can sit at several
 //! places in the drawing. What could not be searched is said so, with the
-//! reason.
+//! reason. A table (ACAD_TABLE) is a block reference too: its block holds
+//! the lines and texts that draw its cells, searched the same way.
 //!
 //! A layout's overall viewport is not searched: it is the sheet itself as
 //! paper space shows it, not something drawn on the sheet, so it would
@@ -47,7 +48,7 @@ pub struct Hit {
     /// own units; `0` when the point is on it. For an entity whose extent
     /// the model does not carry (text, a block reference) this is the
     /// distance to its anchor, and `anchored` says so: a block reference's
-    /// insertion point; a text's start point, or, for a text aligned on an
+    /// or a table's insertion point; a text's start point, or, for a text aligned on an
     /// alignment point, the nearer of the two -- and for aligned or fit text,
     /// which runs from one to the other, the baseline between them; a text
     /// block's or a feature control frame's insertion point. A dimension's
@@ -67,8 +68,9 @@ pub struct Hit {
     pub invisible: bool,
     /// The block references the entity was reached through, outermost
     /// first: empty for an entity of the drawing's own space, one ID per
-    /// INSERT for an entity of a block definition. The entity's geometry
-    /// was placed through these INSERTs' transforms before measuring.
+    /// INSERT or table for an entity of a block definition. The entity's
+    /// geometry was placed through these references' transforms before
+    /// measuring.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via: Vec<EntityId>,
     /// The space the entity is drawn in -- `*Model_Space`, or a
@@ -94,9 +96,10 @@ pub struct Hit {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum NotSearchedReason {
-    /// The INSERT carries no block reference.
+    /// The INSERT or table carries no block reference.
     BlockReferenceAbsent,
-    /// The INSERT's block reference points at nothing the drawing answers to.
+    /// The INSERT's or table's block reference points at nothing the
+    /// drawing answers to.
     BlockReferenceUnresolved,
     /// The block name resolves but no block record of that name exists.
     BlockUndefined,
@@ -381,6 +384,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
             a.horizontal_justification,
         )),
         Entity::Insert(i) => Where::Anchor(distance(p, at(xy(i.insertion_point)))),
+        Entity::AcadTable(a) => Where::Anchor(distance(p, at(xy(a.insertion_point)))),
         // MTEXT and TOLERANCE carry their insertion point in world
         // coordinates; the extent of what they draw depends on a font the
         // model does not carry.
@@ -731,8 +735,31 @@ impl Search<'_> {
                 }),
                 Where::Sheet => {}
             }
-            if let Entity::Insert(insert) = entity {
-                self.follow(insert, t, via);
+            match entity {
+                Entity::Insert(insert) => self.follow(
+                    entity,
+                    &insert.block_name,
+                    |base| insert.world_transform(base),
+                    t,
+                    via,
+                ),
+                // A table's block holds what the table draws, placed as
+                // though based at the origin -- where the renderer places it.
+                Entity::AcadTable(table) => self.follow(
+                    entity,
+                    &table.block_name,
+                    |_| {
+                        Some(Affine2::placement(
+                            xy(table.insertion_point),
+                            table.scale.x,
+                            table.scale.y,
+                            table.rotation,
+                        ))
+                    },
+                    t,
+                    via,
+                ),
+                _ => {}
             }
         }
     }
@@ -819,23 +846,27 @@ impl Search<'_> {
         self.spaces.get(&top).map(|s| s.to_string())
     }
 
-    /// Searches what `insert` draws: its block's entities, placed through
-    /// the INSERT's own transform and then `t`.
+    /// Searches what the block reference `owner` (an INSERT or a table)
+    /// draws: the entities of the block it names, placed through its own
+    /// transform -- `own`, given the block's base point -- and then `t`.
     fn follow(
         &mut self,
-        insert: &uncad_model::model::InsertEntity,
+        owner: &Entity,
+        block_name: &Ref<String>,
+        own: impl FnOnce(Point3D) -> Option<Affine2>,
         t: &Affine2,
         via: &mut Vec<EntityId>,
     ) {
-        let space = self.space_of(insert.common.id, via);
+        let common = owner.common();
+        let space = self.space_of(common.id, via);
         let not = |reason| NotSearched {
-            id: insert.common.id,
-            entity_type: "INSERT".to_string(),
+            id: common.id,
+            entity_type: owner.type_name().to_string(),
             via: via.clone(),
             reason,
             space: space.clone(),
         };
-        let name = match &insert.block_name {
+        let name = match block_name {
             Ref::Resolved(name) => name,
             Ref::Absent => {
                 self.not_searched
@@ -860,7 +891,7 @@ impl Search<'_> {
         }
         // A block placed in a plane tilted out of the world's has no exact
         // 2D placement, so its contents are not measured -- and said so.
-        let Some(own) = insert.world_transform(block.base_point) else {
+        let Some(own) = own(block.base_point) else {
             self.not_searched
                 .push(not(NotSearchedReason::NonSimilarPlacement));
             return;
@@ -871,9 +902,9 @@ impl Search<'_> {
             return;
         }
         let placed = own.then(t);
-        let hides = usize::from(insert.common.invisible);
+        let hides = usize::from(common.invisible);
         self.hidden_refs += hides;
-        via.push(insert.common.id);
+        via.push(common.id);
         self.entities(&block.entities, &placed, via);
         via.pop();
         self.hidden_refs -= hides;

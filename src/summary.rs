@@ -6,7 +6,8 @@ use crate::signature::{signature, Signature};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uncad_model::model::{
-    Confidence, DimensionEntity, DimensionKind, Entity, EntityId, Ref, StyleOverride, TextOverride,
+    AcadTableEntity, Confidence, DimensionEntity, DimensionKind, Entity, EntityId, Ref,
+    StyleOverride, TextOverride,
 };
 use uncad_model::tables::Tables;
 use uncad_model::text::TextKind;
@@ -231,6 +232,92 @@ pub struct ToleranceFrame {
     pub confidence: Confidence,
 }
 
+/// A table (ACAD_TABLE), as the file states it: where it is, the block that
+/// draws it, and what its cells say.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TableSummary {
+    pub id: EntityId,
+    /// Where the table is inserted -- a point [`crate::hit_test`] finds it
+    /// at.
+    pub insertion_point: Point2D,
+    /// The block that draws the table; what it draws is searched by
+    /// [`crate::hit_test`] as a block reference's is.
+    pub block: Ref<String>,
+    /// The table's cells. `None` when the drawing's reader did not read
+    /// them: the table is there, and what it says is not known -- which is
+    /// not the same as a table that says nothing.
+    pub cells: Option<TableCells>,
+    pub confidence: Confidence,
+}
+
+/// The size of a table and the cells that say something.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TableCells {
+    pub rows: usize,
+    pub columns: usize,
+    /// Every cell with text, row by row from the top, each row from the
+    /// left. A cell not listed says nothing: it is empty, holds a block, or
+    /// lies under another cell's span.
+    pub texts: Vec<CellText>,
+}
+
+/// What one table cell says.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct CellText {
+    /// The cell's row, 0 at the top.
+    pub row: usize,
+    /// The cell's column, 0 at the left.
+    pub column: usize,
+    /// The text as the model carries it, its MTEXT codes included.
+    pub text: String,
+    /// The text with its MTEXT codes read (see [`DimensionSummary::plain`]).
+    pub plain: String,
+    /// How many columns the cell spans, itself included; 1 for a cell that
+    /// spans nothing.
+    pub span_columns: u32,
+    /// How many rows the cell spans, likewise.
+    pub span_rows: u32,
+}
+
+impl TableSummary {
+    fn of(t: &AcadTableEntity) -> Self {
+        TableSummary {
+            id: t.common.id,
+            insertion_point: Point2D {
+                x: t.insertion_point.x,
+                y: t.insertion_point.y,
+            },
+            block: t.block_name.clone(),
+            cells: t.grid.as_ref().map(|grid| TableCells {
+                rows: grid.rows.len(),
+                columns: grid.column_widths.len(),
+                texts: grid
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(row, r)| {
+                        r.cells.iter().enumerate().filter_map(move |(column, c)| {
+                            let text = c.text.as_ref().filter(|_| !c.covered)?;
+                            Some(CellText {
+                                row,
+                                column,
+                                text: text.clone(),
+                                plain: plain(text, TextKind::MText),
+                                span_columns: c.span_columns,
+                                span_rows: c.span_rows,
+                            })
+                        })
+                    })
+                    .collect(),
+            }),
+            confidence: t.common.confidence,
+        }
+    }
+}
+
 /// The dimension-style variables that state tolerances, by DXF group.
 const TOLERANCE_VARIABLES: [u16; 5] = [71, 72, 47, 48, 272];
 
@@ -404,6 +491,10 @@ pub struct Summary {
     /// symbols and cells mean is not read here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tolerance_frames: Vec<ToleranceFrame>,
+    /// Every table (ACAD_TABLE) of the drawing's own spaces, by reference
+    /// ID: where it is and what its cells say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<TableSummary>,
     /// Where each space of the drawing is -- model space and every
     /// paper-space sheet, by block name: a coordinate range to point into
     /// (see [`SpaceExtent`]).
@@ -479,6 +570,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
     let mut attributes = Vec::new();
     let mut dimensions = Vec::new();
     let mut tolerance_frames = Vec::new();
+    let mut tables = Vec::new();
 
     for e in &db.entities {
         *by_type.entry(e.type_name().to_string()).or_insert(0) += 1;
@@ -501,6 +593,9 @@ pub fn summarize(db: &CadDatabase) -> Summary {
                 style: t.style_name.clone(),
                 confidence: t.common.confidence,
             });
+        }
+        if let Entity::AcadTable(t) = e {
+            tables.push(TableSummary::of(t));
         }
         if let Entity::Insert(insert) = e {
             match &insert.block_name {
@@ -526,6 +621,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
     attributes.sort_by(|a, b| a.insert.cmp(&b.insert).then(a.id.cmp(&b.id)));
     dimensions.sort_by_key(|d| d.id);
     tolerance_frames.sort_by_key(|t| t.id);
+    tables.sort_by_key(|t| t.id);
 
     let layers = db
         .tables
@@ -569,6 +665,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         unplaced_texts,
         dimensions,
         tolerance_frames,
+        tables,
         extents: crate::extent::space_extents(db),
         signature: signature(db),
         selection: None,
