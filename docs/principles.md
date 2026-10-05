@@ -10,6 +10,8 @@ When a value cannot be established, the library returns **"unknown"** as a first
 
 *What this costs:* coverage. A caller will see "unknown" in places where a heuristic would have produced something plausible. That is intended — a plausible wrong number is worse than no number.
 
+The same holds for structure. A table is listed with its cells only where the file states one (an ACAD_TABLE, whose record carries its rows, columns and cell texts). A table drawn as lines and texts states no rows or columns: reading them from where the lines and texts fall would be recognising a table, not reading one, so such a drawing lists no table and its texts remain texts.
+
 ## 2. Provenance and confidence travel with every entity
 
 The [uncad-model](https://github.com/iyulab/uncad-model) entity model this library consumes carries, for every entity: a **reference ID**, a **provenance** (where the entity came from), and a **confidence** (how far its values can be trusted, including "unknown").
