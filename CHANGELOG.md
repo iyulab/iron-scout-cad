@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-07
+
 ### Added
 
 - `HitTest::table_cells`: for each table (ACAD_TABLE) whose grid holds the point -- in a space, or
@@ -37,6 +39,8 @@ bumps the minor version.
 - `not_measured` also names entity types inside expanded blocks that give no point, and a block
   reference whose block could not be measured, by its type and the reason (`INSERT_UNRESOLVED`,
   `_CYCLE`, `_TOO_DEEP`, `_BUDGET_EXHAUSTED`, `_TILTED`); its insertion point is still measured.
+
+- Built on `uncad-model` 0.6.0.
 
 ## [0.6.0] - 2026-10-05
 
