@@ -7,6 +7,21 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Changed
+
+- A space's extent (`Summary::extents`) and a selection's per-entity bounds (`select`) now take in
+  what a block reference draws: the entities of its block, placed where the reference puts them
+  (nested references compose), beside its insertion point. A table (ACAD_TABLE) is measured by its
+  block the same way, and a dimension by its block of lines, arrows and text. Arcs, circles,
+  ellipses and polyline arc segments are measured exactly under any placement -- turned, mirrored,
+  or scaled differently along each axis. `bounded_by` still names the top-level entity, so a side
+  set by something inside a block names the reference that draws it.
+- An ordinate dimension's definition point (DXF 10) is no longer measured: it is the datum the
+  dimension measures from, not a point it draws.
+- `not_measured` also names entity types inside expanded blocks that give no point, and a block
+  reference whose block could not be measured, by its type and the reason (`INSERT_UNRESOLVED`,
+  `_CYCLE`, `_TOO_DEEP`, `_BUDGET_EXHAUSTED`, `_TILTED`); its insertion point is still measured.
+
 ## [0.6.0] - 2026-10-05
 
 ### Added

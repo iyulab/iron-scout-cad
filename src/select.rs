@@ -7,12 +7,12 @@
 //! compares a field's value: which of the selected circles is the one
 //! wanted is the caller's to read from their records.
 
-use crate::extent::{bounds, points_of, Bounds};
+use crate::extent::{bounds, Bounds, Reach};
 use crate::hit_test::spaces;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uncad_model::model::{Entity, EntityId, Ref};
-use uncad_model::{CadDatabase, Point2D};
+use uncad_model::{Affine2, CadDatabase, Point2D};
 
 /// Which space a selection keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,8 +111,10 @@ pub struct SelectedEntity {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
     /// The box around the points the entity is measured by, as the extents
-    /// measure them (see [`crate::SpaceExtent`]); `None` for an entity this
-    /// crate takes no point from.
+    /// measure them (see [`crate::SpaceExtent`]) -- a block reference's
+    /// holding what it draws; `None` for an entity this crate takes no point
+    /// from. An entity on the DEFPOINTS layer, which the extents leave out,
+    /// is measured here where it is.
     pub bounds: Option<Bounds>,
     /// The model record, when [`Selection::with_detail`] asked for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,7 +132,10 @@ pub struct Selected {
     /// Entity types this crate took no point from among those the other
     /// filters kept: without a window they are selected with no bounds,
     /// with one they are left out, since whether they reach into it cannot
-    /// be told. Sorted, each once.
+    /// be told. A kept block reference also names here what inside its
+    /// block gave no point, and a block it could not measure, in the words
+    /// of [`crate::SpaceExtent::not_measured`] -- its bounds are then only
+    /// what was measured. Sorted, each once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_measured: Vec<String>,
 }
@@ -160,6 +165,8 @@ pub fn select(db: &CadDatabase, selection: &Selection) -> Selected {
     let ids: BTreeSet<EntityId> = selection.ids.iter().copied().collect();
     let mut kept = Vec::new();
     let mut not_measured = BTreeSet::new();
+    // One budget for the whole selection, as for a summary's extents.
+    let mut reach = Reach::per_entity(&db.tables);
     for e in &db.entities {
         let common = e.common();
         if !ids.is_empty() && !ids.contains(&common.id) {
@@ -183,8 +190,9 @@ pub fn select(db: &CadDatabase, selection: &Selection) -> Selected {
             }
         }
         let mut points: Vec<Point2D> = Vec::new();
-        let measured = points_of(e, &db.tables, &mut points);
-        let b = if measured { bounds(&points) } else { None };
+        let mut missing = BTreeSet::new();
+        reach.entity(e, &Affine2::IDENTITY, &mut points, &mut missing);
+        let b = bounds(&points);
         if b.is_none() {
             not_measured.insert(e.type_name().to_string());
         }
@@ -194,6 +202,7 @@ pub fn select(db: &CadDatabase, selection: &Selection) -> Selected {
                 _ => continue,
             }
         }
+        not_measured.extend(missing);
         kept.push(SelectedEntity {
             id: common.id,
             entity_type: e.type_name().to_string(),

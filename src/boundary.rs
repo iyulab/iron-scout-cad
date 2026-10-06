@@ -11,6 +11,7 @@
 //! can be from them.
 
 use crate::curve::{self, Curve};
+use crate::extent::{conic_reach, conic_through, linear};
 use crate::geometry::{distance_to_segments, in_plane, shape_contains, xy};
 use crate::hit_test::NotSearchedReason;
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -110,43 +111,43 @@ pub(crate) fn hatch(
     Ok(Boundary { paths, within })
 }
 
-/// Adds the points `h`'s boundary reaches, in the world's XY, to `out`: the
+/// Adds the points `h`'s boundary reaches, placed through `t`, to `out`: the
 /// ends of its segments and arcs and where each arc and ellipse turns in x
-/// or y, and a spline's control points, whose box holds the curve (or, for
-/// one the file does not define, the points it passes through). `false`
-/// when it adds none -- a hatch on a tilted plane has no exact place in the
-/// world's XY.
-pub(crate) fn hatch_points(h: &HatchEntity, out: &mut Vec<Point2D>) -> bool {
+/// or y -- exactly, under any placement -- and a spline's control points,
+/// whose box holds the curve (or, for one the file does not define, the
+/// points it passes through). `false` when it adds none -- a hatch on a
+/// tilted plane has no exact place in the world's XY.
+pub(crate) fn hatch_points(h: &HatchEntity, t: &Affine2, out: &mut Vec<Point2D>) -> bool {
     let before = out.len();
-    let Some(m) = in_plane(h.extrusion, &Affine2::IDENTITY) else {
+    let Some(m) = in_plane(h.extrusion, t) else {
         return false;
     };
-    let turning = turning(&m);
     for piece in pieces(h).into_iter().flatten() {
         match piece {
             Piece::Run { vertices, closed } => {
-                let Some(placed) = place(&vertices, &m, turning) else {
-                    continue;
-                };
-                for s in bulge::segments(&placed, closed) {
-                    out.extend([s.from, s.to]);
+                // Measured in the hatch's own plane, where each bulge turns
+                // the way the file says; `m` takes the curve to the world.
+                for s in bulge::segments(&vertices, closed) {
+                    out.extend([m.apply(s.from), m.apply(s.to)]);
                     if let Some(arc) = &s.arc {
-                        out.extend(arc.extremes());
+                        conic_through(&m, arc.center, arc.radius, arc.start_angle, arc.sweep, out);
                     }
                 }
-                if placed.len() == 1 {
-                    out.push(placed[0].point);
+                if let [only] = vertices.as_slice() {
+                    out.push(m.apply(only.point));
                 }
             }
             Piece::Ellipse { ellipse, .. } => {
-                let ends = [ellipse.start_angle, ellipse.start_angle + ellipse.sweep()];
-                let turns = ellipse.extremes().unwrap_or_default();
-                out.extend(
-                    ends.into_iter()
-                        .filter_map(|a| ellipse.point_at(a))
-                        .chain(turns)
-                        .map(|q| m.apply(xy(q))),
-                );
+                if let Some(minor) = ellipse.minor_axis() {
+                    conic_reach(
+                        m.apply(xy(ellipse.center)),
+                        linear(&m, xy(ellipse.major_axis_endpoint)),
+                        linear(&m, xy(minor)),
+                        ellipse.start_angle,
+                        ellipse.sweep(),
+                        out,
+                    );
+                }
             }
             Piece::Spline(spline) => {
                 let hull = match spline.nurbs() {
