@@ -3,7 +3,7 @@
 
 use crate::boundary::hatch_points;
 use crate::geometry::{flat_in_xy, image_frame, in_plane, mline_lines, xy};
-use crate::limits::{Expansion, MAX_BLOCK_REF_DEPTH};
+use crate::limits::{NotEntered, Walk};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::f64::consts::{PI, TAU};
@@ -220,10 +220,7 @@ pub(crate) fn conic_through(
 /// following (depth, budget) are shared across the walk.
 pub(crate) struct Reach<'a> {
     tables: &'a Tables,
-    expansion: Expansion,
-    /// The blocks being expanded, outermost first: a reference to one of
-    /// them would never end.
-    open_blocks: Vec<String>,
+    walk: Walk,
     /// The layer each open block's reference is effectively on, outermost
     /// first: an entity of the block on layer 0 takes it as its own.
     reference_layers: Vec<String>,
@@ -242,8 +239,7 @@ impl<'a> Reach<'a> {
     pub(crate) fn drawn(tables: &'a Tables) -> Self {
         Reach {
             tables,
-            expansion: Expansion::default(),
-            open_blocks: Vec::new(),
+            walk: Walk::default(),
             reference_layers: Vec::new(),
             skip_defpoints_at_top: true,
         }
@@ -275,7 +271,7 @@ impl<'a> Reach<'a> {
             Some(reference) if own == "0" => reference.clone(),
             _ => own.to_string(),
         };
-        let at_top = self.open_blocks.is_empty();
+        let at_top = self.walk.at_top();
         if layer.eq_ignore_ascii_case(DEFPOINTS) && (!at_top || self.skip_defpoints_at_top) {
             return;
         }
@@ -327,35 +323,29 @@ impl<'a> Reach<'a> {
         out: &mut Vec<Point2D>,
         not_measured: &mut BTreeSet<String>,
     ) {
-        let mut not = |reason: &str| {
-            not_measured.insert(format!("{}_{reason}", owner.type_name()));
+        let (block, own) = match self.walk.enter(self.tables, block_name, own) {
+            Ok(entered) => entered,
+            Err(why) => {
+                let reason = match why {
+                    NotEntered::Absent | NotEntered::Unresolved | NotEntered::Undefined => {
+                        "UNRESOLVED"
+                    }
+                    NotEntered::Cycle => "CYCLE",
+                    NotEntered::TooDeep => "TOO_DEEP",
+                    NotEntered::Tilted => "TILTED",
+                    NotEntered::BudgetExhausted => "BUDGET_EXHAUSTED",
+                };
+                not_measured.insert(format!("{}_{reason}", owner.type_name()));
+                return;
+            }
         };
-        let Some(block) = block_name
-            .resolved()
-            .and_then(|name| self.tables.block_records.get(name))
-        else {
-            return not("UNRESOLVED");
-        };
-        if self.open_blocks.contains(&block.name) {
-            return not("CYCLE");
-        }
-        if self.open_blocks.len() >= MAX_BLOCK_REF_DEPTH {
-            return not("TOO_DEEP");
-        }
-        let Some(own) = own(block) else {
-            return not("TILTED");
-        };
-        if !self.expansion.take(block.entities.len()) {
-            return not("BUDGET_EXHAUSTED");
-        }
         let placed = own.then(t);
-        self.open_blocks.push(block.name.clone());
         self.reference_layers.push(layer.to_string());
         for inner in &block.entities {
             self.entity(inner, &placed, out, not_measured);
         }
         self.reference_layers.pop();
-        self.open_blocks.pop();
+        self.walk.leave();
     }
 }
 

@@ -46,7 +46,7 @@ use uncad_model::model::{DimensionKind, Entity, InsertEntity};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, Ocs, Point2D, Point3D};
 
-use crate::limits::{Expansion, MAX_BLOCK_REF_DEPTH};
+use crate::limits::{NotEntered, Walk};
 use crate::summary::DimensionSummary;
 
 /// The quantization this crate's signatures follow; see the module doc. A
@@ -126,8 +126,7 @@ pub fn signature(db: &CadDatabase) -> Signature {
         tolerances: ToleranceCounts::default(),
         excluded: BTreeMap::new(),
         not_measured: BTreeMap::new(),
-        open_blocks: Vec::new(),
-        expansion: Expansion::default(),
+        blocks: Walk::default(),
     };
     let model = db
         .tables
@@ -217,10 +216,8 @@ struct Counter<'a> {
     tolerances: ToleranceCounts,
     excluded: BTreeMap<String, u64>,
     not_measured: BTreeMap<String, u64>,
-    /// The blocks being expanded, outermost first: a reference to one of
-    /// them would never end.
-    open_blocks: Vec<String>,
-    expansion: Expansion,
+    /// The blocks being expanded, and what expanding them has cost.
+    blocks: Walk,
 }
 
 fn bump(map: &mut BTreeMap<String, u64>, key: &str) {
@@ -347,29 +344,27 @@ impl Counter<'_> {
             bump(&mut self.excluded, name);
             return;
         }
-        let Some(block) = self.tables.block_records.get(name) else {
-            bump(&mut self.not_measured, "INSERT_UNRESOLVED");
-            return;
+        let (block, inner) = match self
+            .blocks
+            .enter(self.tables, &i.block_name, |_| at.then(i))
+        {
+            Ok(entered) => entered,
+            Err(why) => {
+                let key = match why {
+                    NotEntered::Absent | NotEntered::Unresolved | NotEntered::Undefined => {
+                        "INSERT_UNRESOLVED"
+                    }
+                    NotEntered::Cycle => "INSERT_CYCLE",
+                    NotEntered::TooDeep => "INSERT_TOO_DEEP",
+                    NotEntered::Tilted => "INSERT",
+                    NotEntered::BudgetExhausted => "INSERT_BUDGET_EXHAUSTED",
+                };
+                bump(&mut self.not_measured, key);
+                return;
+            }
         };
-        if self.open_blocks.iter().any(|open| open == name) {
-            bump(&mut self.not_measured, "INSERT_CYCLE");
-            return;
-        }
-        if self.open_blocks.len() >= MAX_BLOCK_REF_DEPTH {
-            bump(&mut self.not_measured, "INSERT_TOO_DEEP");
-            return;
-        }
-        let Some(inner) = at.then(i) else {
-            bump(&mut self.not_measured, "INSERT");
-            return;
-        };
-        if !self.expansion.take(block.entities.len()) {
-            bump(&mut self.not_measured, "INSERT_BUDGET_EXHAUSTED");
-            return;
-        }
-        self.open_blocks.push(name.to_string());
         self.walk(&block.entities, &inner);
-        self.open_blocks.pop();
+        self.blocks.leave();
     }
 
     /// `length` (drawing units) in whole micrometres, when the unit is known

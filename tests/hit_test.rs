@@ -424,7 +424,7 @@ fn a_circle_in_a_stretched_block_is_not_guessed_at() {
 }
 
 #[test]
-fn a_block_that_references_itself_ends_with_the_depth_reported() {
+fn a_block_that_references_itself_is_searched_once_and_the_cycle_named() {
     use uncad_model::model::{InsertEntity, Point3D};
     use uncad_model::tables::BlockRecord;
     let refer = |id: u64| {
@@ -465,11 +465,23 @@ fn a_block_that_references_itself_ends_with_the_depth_reported() {
         },
     );
     let r = hit_test(&db, Point2D { x: 0.0, y: 0.0 }, 0.5);
-    assert!(r
-        .not_searched
-        .iter()
-        .any(|n| n.reason == NotSearchedReason::NestingTooDeep));
-    assert!(r.hits.len() > 1 && r.hits.len() < 100, "{}", r.hits.len());
+    // The outer reference, and the one inside the block it draws -- found
+    // once each, not once per level down to the depth limit.
+    let found: Vec<_> = r.hits.iter().map(|h| (h.id, h.via.clone())).collect();
+    assert_eq!(
+        found,
+        [
+            (EntityId::new(1), vec![]),
+            (EntityId::new(2), vec![EntityId::new(1)])
+        ],
+        "{r:?}"
+    );
+    let cycle: Vec<_> = r.not_searched.iter().map(|n| (n.id, n.reason)).collect();
+    assert_eq!(
+        cycle,
+        [(EntityId::new(2), NotSearchedReason::BlockReferenceCycle)],
+        "{r:?}"
+    );
 }
 
 #[test]
@@ -676,4 +688,53 @@ fn a_limited_answer_keeps_the_nearest_and_says_how_many_there_were() {
     // Nothing left out: no total.
     let same = hit_test(&db, p(20.0, 20.0), 1000.0).limited(all.hits.len());
     assert_eq!(same.hits_total, None);
+}
+
+#[test]
+fn a_chain_of_references_deeper_than_the_limit_says_so() {
+    use uncad_model::model::{InsertEntity, Point3D};
+    use uncad_model::tables::BlockRecord;
+    let refer = |id: u64, block: String| {
+        Entity::Insert(InsertEntity {
+            common: common(id),
+            block_name: Ref::Resolved(block),
+            insertion_point: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            scale: Point3D {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            rotation: 0.0,
+            attribs: Vec::new(),
+            extrusion: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+        })
+    };
+    // L0 places L1, which places L2, ... down to L24: no block repeats.
+    let mut db = CadDatabase {
+        entities: vec![refer(1, "L0".into())],
+        tables: Default::default(),
+        header: Default::default(),
+        read_diagnostics: Default::default(),
+    };
+    for level in 0..25u64 {
+        db.tables.block_records.insert(
+            format!("L{level}"),
+            BlockRecord {
+                base_point: Default::default(),
+                name: format!("L{level}"),
+                entities: vec![refer(100 + level, format!("L{}", level + 1))],
+            },
+        );
+    }
+    let r = hit_test(&db, Point2D { x: 0.0, y: 0.0 }, 0.5);
+    let reasons: Vec<_> = r.not_searched.iter().map(|n| n.reason).collect();
+    assert_eq!(reasons, [NotSearchedReason::NestingTooDeep], "{r:?}");
 }

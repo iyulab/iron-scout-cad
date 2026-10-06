@@ -35,7 +35,7 @@ use uncad_model::model::{
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
-use crate::limits::{Expansion, MAX_BLOCK_REF_DEPTH};
+use crate::limits::{NotEntered, Walk};
 
 /// One entity at the point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -114,6 +114,10 @@ pub enum NotSearchedReason {
     /// The block reference sits inside 20 others, deeper than the search
     /// follows.
     NestingTooDeep,
+    /// The block reference draws a block already being searched -- it draws
+    /// itself, and following it would never end. What the block draws was
+    /// searched once, where the outer reference put it.
+    BlockReferenceCycle,
     /// The block would take the search past the ten million entities it
     /// meets inside expanded blocks in one call.
     BlockReferenceBudgetExhausted,
@@ -667,8 +671,8 @@ struct Search<'a> {
     enclosing: Vec<Hit>,
     unsupported: BTreeSet<String>,
     not_searched: Vec<NotSearched>,
-    /// What the search has spent of its expansion budget.
-    expansion: Expansion,
+    /// The blocks being searched, and what expanding them has cost.
+    blocks: Walk,
     /// How many of the block references on the current path are marked
     /// invisible.
     hidden_refs: usize,
@@ -866,47 +870,33 @@ impl Search<'_> {
             reason,
             space: space.clone(),
         };
-        let name = match block_name {
-            Ref::Resolved(name) => name,
-            Ref::Absent => {
-                self.not_searched
-                    .push(not(NotSearchedReason::BlockReferenceAbsent));
-                return;
-            }
-            Ref::Unresolved(_) => {
-                self.not_searched
-                    .push(not(NotSearchedReason::BlockReferenceUnresolved));
-                return;
-            }
-        };
-        let Some(block) = self.db.tables.block_records.get(name) else {
-            self.not_searched
-                .push(not(NotSearchedReason::BlockUndefined));
-            return;
-        };
-        if via.len() >= MAX_BLOCK_REF_DEPTH {
-            self.not_searched
-                .push(not(NotSearchedReason::NestingTooDeep));
-            return;
-        }
         // A block placed in a plane tilted out of the world's has no exact
         // 2D placement, so its contents are not measured -- and said so.
-        let Some(own) = own(block.base_point) else {
-            self.not_searched
-                .push(not(NotSearchedReason::NonSimilarPlacement));
-            return;
+        let (block, own) = match self
+            .blocks
+            .enter(&self.db.tables, block_name, |b| own(b.base_point))
+        {
+            Ok(entered) => entered,
+            Err(why) => {
+                self.not_searched.push(not(match why {
+                    NotEntered::Absent => NotSearchedReason::BlockReferenceAbsent,
+                    NotEntered::Unresolved => NotSearchedReason::BlockReferenceUnresolved,
+                    NotEntered::Undefined => NotSearchedReason::BlockUndefined,
+                    NotEntered::Cycle => NotSearchedReason::BlockReferenceCycle,
+                    NotEntered::TooDeep => NotSearchedReason::NestingTooDeep,
+                    NotEntered::Tilted => NotSearchedReason::NonSimilarPlacement,
+                    NotEntered::BudgetExhausted => NotSearchedReason::BlockReferenceBudgetExhausted,
+                }));
+                return;
+            }
         };
-        if !self.expansion.take(block.entities.len()) {
-            self.not_searched
-                .push(not(NotSearchedReason::BlockReferenceBudgetExhausted));
-            return;
-        }
         let placed = own.then(t);
         let hides = usize::from(common.invisible);
         self.hidden_refs += hides;
         via.push(common.id);
         self.entities(&block.entities, &placed, via);
         via.pop();
+        self.blocks.leave();
         self.hidden_refs -= hides;
     }
 }
@@ -946,7 +936,7 @@ pub fn hit_test(db: &CadDatabase, point: Point2D, tolerance: f64) -> HitTest {
         enclosing: Vec::new(),
         unsupported: BTreeSet::new(),
         not_searched: Vec::new(),
-        expansion: Expansion::default(),
+        blocks: Walk::default(),
         hidden_refs: 0,
         spaces: spaces(db),
     };

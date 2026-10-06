@@ -7,8 +7,17 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `NotSearchedReason::BlockReferenceCycle`: a block reference that draws a block already being
+  searched -- one that draws itself.
+
 ### Changed
 
+- A block that draws itself is searched once, where the outer reference puts it, and the inner
+  reference is reported as `BlockReferenceCycle` -- before, the search followed it again down to
+  the depth limit, finding the same entities once per level. The hit test, the signature and the
+  extents now decide in one place whether a block reference is followed.
 - A space's extent (`Summary::extents`) and a selection's per-entity bounds (`select`) now take in
   what a block reference draws: the entities of its block, placed where the reference puts them
   (nested references compose), beside its insertion point. A table (ACAD_TABLE) is measured by its
