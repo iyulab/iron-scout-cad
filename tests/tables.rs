@@ -180,3 +180,120 @@ fn a_table_naming_a_block_the_drawing_lacks_is_not_searched_and_says_so() {
     );
     assert_eq!(n.reason, NotSearchedReason::BlockUndefined);
 }
+
+/// The parts list with the way its rows run: `flow` is the model's
+/// `"DOWN"` or `"UP"`, or `None` when it is not known.
+fn flowing(id: u64, at: (f64, f64), rotation: f64, flow: Option<&str>) -> Value {
+    let mut t = table(id, "*T1", at, rotation, grid());
+    t["flow"] = json!(flow);
+    t
+}
+
+/// The (row, column) of each cell under `at`.
+fn cells(db: &CadDatabase, at: Point2D) -> Vec<(usize, usize)> {
+    hit_test(db, at, 1e-9)
+        .table_cells
+        .iter()
+        .map(|c| (c.row, c.column))
+        .collect()
+}
+
+#[test]
+fn a_point_in_a_table_names_its_row_and_column() {
+    // Columns 20 and 10 wide from x = 10; rows 5 and 4 high running down
+    // from y = 20. The title spans both columns.
+    let db = drawing(vec![flowing(7, (10.0, 20.0), 0.0, Some("DOWN"))]);
+    assert_eq!(cells(&db, p(15.0, 18.0)), [(0, 0)]);
+    // Under the title's span: the title cell, by its first column.
+    assert_eq!(cells(&db, p(35.0, 18.0)), [(0, 0)]);
+    assert_eq!(cells(&db, p(15.0, 13.0)), [(1, 0)]);
+    assert_eq!(cells(&db, p(35.0, 13.0)), [(1, 1)]);
+    // Outside the grid: no cell.
+    assert!(cells(&db, p(15.0, 10.0)).is_empty());
+    assert!(cells(&db, p(41.0, 13.0)).is_empty());
+    let hit = &hit_test(&db, p(15.0, 13.0), 1e-9).table_cells[0];
+    assert_eq!(hit.table, EntityId::new(7));
+    assert!(hit.via.is_empty());
+}
+
+#[test]
+fn a_point_on_the_edge_between_cells_names_each() {
+    let db = drawing(vec![flowing(7, (10.0, 20.0), 0.0, Some("DOWN"))]);
+    assert_eq!(cells(&db, p(30.0, 13.0)), [(1, 0), (1, 1)]);
+}
+
+#[test]
+fn a_table_whose_rows_run_up_counts_its_first_row_at_the_bottom() {
+    let db = drawing(vec![flowing(7, (10.0, 20.0), 0.0, Some("UP"))]);
+    assert_eq!(cells(&db, p(15.0, 22.0)), [(0, 0)]);
+    assert_eq!(cells(&db, p(15.0, 27.0)), [(1, 0)]);
+    assert!(cells(&db, p(15.0, 18.0)).is_empty());
+}
+
+#[test]
+fn a_turned_table_counts_its_cells_along_its_own_axes() {
+    // Turned a quarter: its columns run up from (10, 20), its rows to the
+    // right. The table-local point (25, -7) -- row 1, column 1 -- is at
+    // (10 + 7, 20 + 25).
+    let db = drawing(vec![flowing(
+        7,
+        (10.0, 20.0),
+        std::f64::consts::FRAC_PI_2,
+        Some("DOWN"),
+    )]);
+    assert_eq!(cells(&db, p(17.0, 45.0)), [(1, 1)]);
+}
+
+#[test]
+fn a_table_drawn_by_a_block_reference_names_the_chain() {
+    let mut db = drawing(vec![entity(
+        "INSERT",
+        3,
+        json!({
+            "block_name": {"type": "RESOLVED", "data": "W"},
+            "insertion_point": xyz(100.0, 0.0),
+            "scale": {"x": 1.0, "y": 1.0, "z": 1.0}, "rotation": 0.0,
+            "attribs": []
+        }),
+    )]);
+    let inner: Vec<uncad_model::model::Entity> =
+        serde_json::from_value(json!([flowing(7, (10.0, 20.0), 0.0, Some("DOWN"))]))
+            .expect("the table deserializes");
+    db.tables.block_records.insert(
+        "W".to_string(),
+        BlockRecord {
+            base_point: Default::default(),
+            name: "W".to_string(),
+            entities: inner,
+        },
+    );
+    let r = hit_test(&db, p(115.0, 13.0), 1e-9);
+    let found: Vec<_> = r
+        .table_cells
+        .iter()
+        .map(|c| (c.table, c.via.clone(), c.row, c.column))
+        .collect();
+    assert_eq!(found, [(EntityId::new(7), vec![EntityId::new(3)], 1, 0)]);
+}
+
+#[test]
+fn a_table_whose_rows_way_is_unknown_says_so_where_the_point_is_at_it() {
+    let db = drawing(vec![flowing(7, (10.0, 20.0), 0.0, None)]);
+    // At its insertion point the table itself is found: which cell is not
+    // known, and said so.
+    let r = hit_test(&db, p(10.0, 20.0), 1e-9);
+    assert!(r.table_cells.is_empty());
+    let unknown: Vec<_> = r
+        .not_searched
+        .iter()
+        .filter(|n| n.reason == NotSearchedReason::TableCellsUnknown)
+        .map(|n| n.id)
+        .collect();
+    assert_eq!(unknown, [EntityId::new(7)]);
+    // Far from it, nothing is said about it.
+    let r = hit_test(&db, p(500.0, 500.0), 1e-9);
+    assert!(!r
+        .not_searched
+        .iter()
+        .any(|n| n.reason == NotSearchedReason::TableCellsUnknown));
+}

@@ -39,6 +39,24 @@ pub(crate) fn in_plane(extrusion: Point3D, t: &Affine2) -> Option<Affine2> {
     Some(Ocs::of(extrusion)?.flat_map()?.then(t))
 }
 
+/// The map that undoes `m`; `None` when `m` flattens the plane (or is not
+/// finite), so no point comes back from it.
+pub(crate) fn inverse(m: &Affine2) -> Option<Affine2> {
+    let det = m.determinant();
+    if det == 0.0 || !det.is_finite() {
+        return None;
+    }
+    let (a, b, c, d) = (m.d / det, -m.b / det, -m.c / det, m.a / det);
+    Some(Affine2 {
+        a,
+        b,
+        c,
+        d,
+        e: -(a * m.e + c * m.f),
+        f: -(b * m.e + d * m.f),
+    })
+}
+
 pub(crate) fn xy(p: Point3D) -> Point2D {
     Point2D { x: p.x, y: p.y }
 }

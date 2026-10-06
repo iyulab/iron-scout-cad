@@ -23,15 +23,16 @@
 use crate::curve::{self, Curve};
 use crate::geometry::{
     distance, distance_to_arc, distance_to_line, distance_to_segment, distance_to_segments,
-    flat_in_xy, flat_plane, image_frame, in_plane, mline_lines, shape_contains, world_angle,
-    world_xy, xy,
+    flat_in_xy, flat_plane, image_frame, in_plane, inverse, mline_lines, shape_contains,
+    world_angle, world_xy, xy,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
-    Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification, LeaderLineType,
-    LeaderPath, MLineEntity, MultiLeaderContent, Ref, ViewportEntity,
+    AcadTableEntity, Confidence, DimensionEntity, Entity, EntityId, HorizontalJustification,
+    LeaderLineType, LeaderPath, MLineEntity, MultiLeaderContent, Ref, TableFlow, TableGrid,
+    ViewportEntity,
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
@@ -147,6 +148,11 @@ pub enum NotSearchedReason {
     /// nothing. The type is one this crate measures; this entity carries
     /// no geometry for it -- the reader's diagnostics may say why.
     NoGeometry,
+    /// The point is at a table, but which of its cells holds it is not
+    /// known: the drawing's reader did not read the table's grid, or the
+    /// way its rows run from its insertion point (the model's `flow`), and
+    /// this crate does not guess either.
+    TableCellsUnknown,
 }
 
 /// An entity, or a block reference's contents, that the search did not
@@ -191,6 +197,36 @@ pub struct HitTest {
     /// nearest; absent when nothing was left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hits_total: Option<usize>,
+    /// The cells that hold the point: for each table (ACAD_TABLE) -- of a
+    /// space, or drawn by a block reference -- whose grid the point lies
+    /// in, the row and column of the cell holding it, counted from 0 from
+    /// the first row (the top row when the table's rows run down, the
+    /// bottom row when they run up -- see the model's `TableFlow`) and the
+    /// left column. A merged cell is named by its first row and column; a
+    /// point on the edge between cells names each. Where a table's cells
+    /// lie follows from its grid, the way its rows run and its placement;
+    /// a table missing either of the first two is in `not_searched`
+    /// ([`NotSearchedReason::TableCellsUnknown`]) when the point is at it.
+    /// By table reference ID, then chain, row and column.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_cells: Vec<TableCellHit>,
+}
+
+/// The cell of a table that holds the point. See [`HitTest::table_cells`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TableCellHit {
+    /// The table's reference ID.
+    pub table: EntityId,
+    /// The block references the table was reached through, outermost
+    /// first, as [`Hit::via`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via: Vec<EntityId>,
+    pub row: usize,
+    pub column: usize,
+    /// The space the table is in, as [`Hit::space`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
 }
 
 impl HitTest {
@@ -678,6 +714,10 @@ struct Search<'a> {
     hidden_refs: usize,
     /// The space block each entity of the drawing's own spaces is in.
     spaces: BTreeMap<EntityId, &'a str>,
+    table_cells: Vec<TableCellHit>,
+    /// Tables met whose cells could not be placed, with their chain and
+    /// space: said so if the point turns out to be at one.
+    unplaced_tables: Vec<NotSearched>,
 }
 
 impl Search<'_> {
@@ -749,20 +789,23 @@ impl Search<'_> {
                 ),
                 // A table's block holds what the table draws, placed as
                 // though based at the origin -- where the renderer places it.
-                Entity::AcadTable(table) => self.follow(
-                    entity,
-                    &table.block_name,
-                    |_| {
-                        Some(Affine2::placement(
-                            xy(table.insertion_point),
-                            table.scale.x,
-                            table.scale.y,
-                            table.rotation,
-                        ))
-                    },
-                    t,
-                    via,
-                ),
+                Entity::AcadTable(table) => {
+                    self.cells_of(table, t, via);
+                    self.follow(
+                        entity,
+                        &table.block_name,
+                        |_| {
+                            Some(Affine2::placement(
+                                xy(table.insertion_point),
+                                table.scale.x,
+                                table.scale.y,
+                                table.rotation,
+                            ))
+                        },
+                        t,
+                        via,
+                    )
+                }
                 _ => {}
             }
         }
@@ -850,6 +893,59 @@ impl Search<'_> {
         self.spaces.get(&top).map(|s| s.to_string())
     }
 
+    /// Names the cells of `table`, placed through `t`, that hold the point
+    /// -- or, when its grid or the way its rows run is not known, keeps it
+    /// to be named as not searched if the point is at it.
+    fn cells_of(&mut self, table: &AcadTableEntity, t: &Affine2, via: &[EntityId]) {
+        let id = table.common.id;
+        let space = self.space_of(id, via);
+        let placed = Affine2::placement(
+            xy(table.insertion_point),
+            table.scale.x,
+            table.scale.y,
+            table.rotation,
+        )
+        .then(t);
+        let (Some(grid), Some(flow), Some(back)) = (&table.grid, table.flow, inverse(&placed))
+        else {
+            self.unplaced_tables.push(NotSearched {
+                id,
+                entity_type: "ACAD_TABLE".to_string(),
+                via: via.to_vec(),
+                reason: NotSearchedReason::TableCellsUnknown,
+                space,
+            });
+            return;
+        };
+        // The point in the table's own coordinates: x along its columns from
+        // the insertion point, y up.
+        let q = back.apply(self.point);
+        let xs = edges(grid.column_widths.iter().copied());
+        let ys = edges(grid.rows.iter().map(|r| r.height));
+        let holds = |v: f64, lo: f64, hi: f64| lo <= v && v <= hi;
+        let columns: Vec<usize> = (0..grid.column_widths.len())
+            .filter(|&j| holds(q.x, xs[j], xs[j + 1]))
+            .collect();
+        let rows = (0..grid.rows.len()).filter(|&i| match flow {
+            TableFlow::Down => holds(q.y, -ys[i + 1], -ys[i]),
+            TableFlow::Up => holds(q.y, ys[i], ys[i + 1]),
+        });
+        let mut cells = BTreeSet::new();
+        for i in rows {
+            for &j in &columns {
+                cells.insert(merged_cell(grid, i, j));
+            }
+        }
+        self.table_cells
+            .extend(cells.into_iter().map(|(row, column)| TableCellHit {
+                table: id,
+                via: via.to_vec(),
+                row,
+                column,
+                space: space.clone(),
+            }));
+    }
+
     /// Searches what the block reference `owner` (an INSERT or a table)
     /// draws: the entities of the block it names, placed through its own
     /// transform -- `own`, given the block's base point -- and then `t`.
@@ -901,6 +997,38 @@ impl Search<'_> {
     }
 }
 
+/// Where each of `sizes` begins and the last ends: 0, then the running
+/// sums.
+fn edges(sizes: impl Iterator<Item = f64>) -> Vec<f64> {
+    let mut sum = 0.0;
+    std::iter::once(0.0)
+        .chain(sizes.map(|s| {
+            sum += s;
+            sum
+        }))
+        .collect()
+}
+
+/// The cell that shows `row`, `column`: itself, or -- when another cell's
+/// span covers it -- that cell, by its first row and column.
+fn merged_cell(grid: &TableGrid, row: usize, column: usize) -> (usize, usize) {
+    if !grid.rows[row].cells.get(column).is_some_and(|c| c.covered) {
+        return (row, column);
+    }
+    for r in (0..=row).rev() {
+        for c in (0..=column).rev() {
+            let Some(cell) = grid.rows[r].cells.get(c) else {
+                continue;
+            };
+            let (down, across) = (cell.span_rows as usize, cell.span_columns as usize);
+            if !cell.covered && r + down > row && c + across > column {
+                return (r, c);
+            }
+        }
+    }
+    (row, column)
+}
+
 /// The space block each entity of the drawing's own spaces is in: its own
 /// entities, and the attribute values of its block references, which the
 /// model lists at the top level beside them.
@@ -939,6 +1067,8 @@ pub fn hit_test(db: &CadDatabase, point: Point2D, tolerance: f64) -> HitTest {
         blocks: Walk::default(),
         hidden_refs: 0,
         spaces: spaces(db),
+        table_cells: Vec::new(),
+        unplaced_tables: Vec::new(),
     };
     search.entities(&db.entities, &Affine2::IDENTITY, &mut Vec::new());
     let Search {
@@ -946,8 +1076,21 @@ pub fn hit_test(db: &CadDatabase, point: Point2D, tolerance: f64) -> HitTest {
         mut enclosing,
         unsupported,
         mut not_searched,
+        mut table_cells,
+        unplaced_tables,
         ..
     } = search;
+    // A table whose cells could not be placed matters where the point is at
+    // it: the table itself, or something its block draws, is found there.
+    let at: BTreeSet<EntityId> = hits
+        .iter()
+        .chain(&enclosing)
+        .flat_map(|h| std::iter::once(h.id).chain(h.via.iter().copied()))
+        .collect();
+    not_searched.extend(unplaced_tables.into_iter().filter(|t| at.contains(&t.id)));
+    table_cells.sort_by(|a, b| {
+        (a.table, &a.via, a.row, a.column).cmp(&(b.table, &b.via, b.row, b.column))
+    });
     hits.sort_by(|a, b| {
         a.distance
             .total_cmp(&b.distance)
@@ -962,5 +1105,6 @@ pub fn hit_test(db: &CadDatabase, point: Point2D, tolerance: f64) -> HitTest {
         unsupported: unsupported.into_iter().collect(),
         not_searched,
         hits_total: None,
+        table_cells,
     }
 }

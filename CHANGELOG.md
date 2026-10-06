@@ -9,6 +9,13 @@ bumps the minor version.
 
 ### Added
 
+- `HitTest::table_cells`: for each table (ACAD_TABLE) whose grid holds the point -- in a space, or
+  drawn by a block reference -- the row and column of the cell holding it (`TableCellHit`, with the
+  chain of references it was reached through and its space), counted from the table's first row
+  in the way its rows run and from its left column. A merged cell is named by its first row and
+  column; a point on the edge between cells names each. A table whose grid or flow is not known is
+  listed in `not_searched` with the new reason `NotSearchedReason::TableCellsUnknown` when the point
+  is at it.
 - `NotSearchedReason::BlockReferenceCycle`: a block reference that draws a block already being
   searched -- one that draws itself.
 
