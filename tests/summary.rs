@@ -629,3 +629,30 @@ fn g10_names_the_reference_to_a_block_the_file_never_defines() {
     let g1 = serde_json::to_value(summarize(&g1())).unwrap();
     assert!(g1.get("unresolved_inserts").is_none());
 }
+
+#[test]
+fn a_block_that_is_an_external_reference_says_so() {
+    let mut db = g9();
+    db.tables
+        .block_records
+        .get_mut("TITLEBLOCK")
+        .expect("G9 defines the title block")
+        .external_reference = Some(uncad_model::tables::ExternalReference {
+        path: "frames/a3.dwg".to_string(),
+        overlay: false,
+    });
+    let s = summarize(&db);
+    let title = s.blocks.iter().find(|b| b.name == "TITLEBLOCK").unwrap();
+    assert_eq!(
+        title
+            .external_reference
+            .as_ref()
+            .map(|x| (x.path.as_str(), x.overlay)),
+        Some(("frames/a3.dwg", false))
+    );
+    assert!(s
+        .blocks
+        .iter()
+        .filter(|b| b.name != "TITLEBLOCK")
+        .all(|b| b.external_reference.is_none()));
+}

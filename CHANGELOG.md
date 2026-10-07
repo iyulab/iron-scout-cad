@@ -7,6 +7,12 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `BlockSummary::external_reference`: a block that states it is an external reference says which
+  drawing it stands for (its path as written, and whether it is an overlay). That drawing's content
+  is not in the file, so the block's `entity_count` counts only what was bound or cached into it.
+
 ## [0.9.0] - 2026-10-07
 
 ### Changed

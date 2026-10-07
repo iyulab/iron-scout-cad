@@ -9,7 +9,7 @@ use uncad_model::model::{
     AcadTableEntity, Confidence, DimensionEntity, DimensionKind, Entity, EntityId, Ref,
     StyleOverride, TextOverride,
 };
-use uncad_model::tables::Tables;
+use uncad_model::tables::{ExternalReference, Tables};
 use uncad_model::text::TextKind;
 use uncad_model::{CadDatabase, Ocs, Point2D, Units};
 
@@ -32,6 +32,12 @@ pub struct BlockSummary {
     pub entity_count: usize,
     /// Top-level INSERTs that resolve to this block.
     pub insert_count: usize,
+    /// The drawing this block stands for, when the block states that it is
+    /// an external reference: that drawing's content is not in this file,
+    /// so [`Self::entity_count`] counts only what was bound or cached into
+    /// the definition -- often nothing -- and its references draw no more.
+    /// `None` for an ordinary block.
+    pub external_reference: Option<ExternalReference>,
 }
 
 /// A block reference whose block the drawing does not hold: the file names
@@ -642,6 +648,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
             name: b.name.clone(),
             entity_count: b.entities.len(),
             insert_count: per_block.get(b.name.as_str()).copied().unwrap_or(0),
+            external_reference: b.external_reference.clone(),
         })
         .collect();
 
