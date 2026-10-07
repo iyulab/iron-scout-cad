@@ -40,6 +40,7 @@ fn drawing(spaces: Vec<(&str, Vec<Value>)>) -> CadDatabase {
                 base_point: Default::default(),
                 name: name.to_string(),
                 entities,
+                external_reference: None,
             },
         );
     }

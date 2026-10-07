@@ -299,6 +299,7 @@ fn a_construction_line_in_a_block_is_placed_with_it() {
             base_point: Default::default(),
             name: "B".to_string(),
             entities,
+            external_reference: None,
         },
     );
     let r = hit_test(&db, p(7.0, 100.0), 3.5);

@@ -49,6 +49,7 @@ fn model_space(entities: Vec<Value>) -> CadDatabase {
             base_point: Default::default(),
             name: "*Model_Space".to_string(),
             entities,
+            external_reference: None,
         },
     );
     db.tables

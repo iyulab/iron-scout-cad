@@ -265,6 +265,7 @@ fn a_table_drawn_by_a_block_reference_names_the_chain() {
             base_point: Default::default(),
             name: "W".to_string(),
             entities: inner,
+            external_reference: None,
         },
     );
     let r = hit_test(&db, p(115.0, 13.0), 1e-9);

@@ -358,6 +358,7 @@ fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
             base_point: Default::default(),
             name: "HOLE".into(),
             entities: vec![circle],
+            external_reference: None,
         },
     );
     db
@@ -462,6 +463,7 @@ fn a_block_that_references_itself_is_searched_once_and_the_cycle_named() {
             base_point: Default::default(),
             name: "LOOP".into(),
             entities: vec![refer(2)],
+            external_reference: None,
         },
     );
     let r = hit_test(&db, Point2D { x: 0.0, y: 0.0 }, 0.5);
@@ -731,6 +733,7 @@ fn a_chain_of_references_deeper_than_the_limit_says_so() {
                 base_point: Default::default(),
                 name: format!("L{level}"),
                 entities: vec![refer(100 + level, format!("L{}", level + 1))],
+                external_reference: None,
             },
         );
     }
