@@ -7,6 +7,21 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `relate(&db, tolerance)`, a third read-only verb: for every dimension, the points it is built on
+  that are points of the geometry it measures (`PointRole` -- which ones depends on the dimension's
+  kind; none when the kind is not stated), and for each point every entity of the same space it is
+  related to -- `AT_POINT` with the `Anchor` the format defines (a line's end, a centre, a vertex, a
+  corner, ...) or `ON_CURVE` (a line, an arc, a circle or a polyline segment), with the distance and
+  the chain of block references the entity was reached through. Dimensions drawn by block
+  references are listed too. A block reference's insertion point is not an anchor. The answer states
+  the tolerance (the caller's, or a millionth of the larger side of the box around the defined
+  points), the blocks standing for other drawings that the drawing places, the entity types whose
+  geometry the model does not know, and what could not be searched. A tolerance that is not a
+  positive finite number is refused (`InvalidTolerance`).
+  `Relate::of_dimension(id)` keeps one dimension and what the answer says about the drawing.
+
 ## [0.10.0] - 2026-10-07
 
 ### Added

@@ -1,7 +1,7 @@
 //! Deterministic eyes for a 2D CAD drawing in the [`uncad_model`] entity
-//! model: a compact [`Summary`] of what the drawing contains, and
-//! [`hit_test`], which turns a point into the entity references at that
-//! spot.
+//! model: a compact [`Summary`] of what the drawing contains, [`hit_test`],
+//! which turns a point into the entity references at that spot, and
+//! [`relate`], which says what each dimension's definition points sit on.
 //!
 //! Nothing here infers. A value that cannot be established is reported as
 //! such -- an attribute that several title blocks give different values for
@@ -12,7 +12,7 @@
 //! made from. The input is never
 //! modified, and the same drawing gives the same summary, byte for byte.
 //!
-//! The verb set of this crate is these two read-only verbs. A summary can
+//! The verb set of this crate is these three read-only verbs. A summary can
 //! also carry a [`Selection`] -- entities picked by type, layer, window,
 //! space or reference ID, each with its box and, on request, its model
 //! record -- a parameter of the summary, not a verb of its own.
@@ -26,12 +26,17 @@ mod extent;
 mod geometry;
 mod hit_test;
 mod limits;
+mod relate;
 mod select;
 mod signature;
 mod summary;
 
 pub use extent::{BoundedBy, Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason, TableCellHit};
+pub use relate::{
+    relate, Anchor, DefinitionPoint, DimensionRelations, ExternalReferenceBlock, InvalidTolerance,
+    PlacedReference, PointRole, Relate, Relation, RelationKind,
+};
 pub use select::{select, Selected, SelectedEntity, Selection, SpaceFilter};
 pub use signature::{signature, Signature, ToleranceCounts, SIGNATURE_VERSION};
 pub use summary::{
