@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-20
+
 ### Added
 
 - `relate(&db, tolerance)`, a third read-only verb: for every dimension, the points it is built on
