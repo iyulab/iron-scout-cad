@@ -259,6 +259,8 @@ fn a_text_on_a_tilted_plane_is_listed_as_unplaced_not_paired() {
     let ids: Vec<EntityId> = s.unplaced_texts.iter().map(|t| t.id).collect();
     assert_eq!(ids, [tilted.expect("G7 has the value")]);
     assert_eq!(s.unplaced_texts[0].plain, "BP-1042");
+    // No 2D position places it exactly, so it says none.
+    assert_eq!(s.unplaced_texts[0].start_point, None);
     // It is no longer the label's value; the label has none left on its row.
     assert!(s
         .labelled_texts
@@ -655,4 +657,43 @@ fn a_block_that_is_an_external_reference_says_so() {
         .iter()
         .filter(|b| b.name != "TITLEBLOCK")
         .all(|b| b.external_reference.is_none()));
+}
+
+#[test]
+fn a_title_block_value_says_where_it_starts_and_in_which_space() {
+    let db = g1();
+    let s = summarize(&db);
+    for a in &s.attributes {
+        let model = db
+            .entities
+            .iter()
+            .find_map(|e| match e {
+                Entity::Insert(i) => i.attribs.iter().find(|x| x.common.id == a.id),
+                _ => None,
+            })
+            .expect("the value is an ATTRIB of a reference");
+        assert_eq!(a.start_point, Some(model.start_point), "{}", a.tag);
+        assert_eq!(a.space.as_deref(), Some("*Model_Space"), "{}", a.tag);
+    }
+}
+
+#[test]
+fn a_label_and_its_value_say_where_they_start() {
+    let db = g7();
+    let s = summarize(&db);
+    let start = |id: EntityId| {
+        db.entities
+            .iter()
+            .find_map(|e| match e {
+                Entity::Text(t) if t.common.id == id => Some(t.start_point),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!(!s.labelled_texts.is_empty());
+    for p in &s.labelled_texts {
+        assert_eq!(p.label.start_point, Some(start(p.label.id)));
+        assert_eq!(p.value.start_point, Some(start(p.value.id)));
+        assert_eq!(p.label.space.as_deref(), Some("*Model_Space"));
+    }
 }

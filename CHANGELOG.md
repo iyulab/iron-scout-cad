@@ -7,6 +7,13 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- The summary says where each text it lists starts and in which space: `start_point` (DXF 10, in world
+  coordinates) and `space` on every attribute value, on both sides of every label-value pair and on
+  each unplaced text -- the point to show a reader where a value came from. A text on a plane tilted
+  out of the world's has no `start_point`, since no 2D position places it exactly.
+
 ## [0.11.0] - 2026-10-20
 
 ### Added

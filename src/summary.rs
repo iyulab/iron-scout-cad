@@ -70,6 +70,15 @@ pub struct AttributeValue {
     pub value: String,
     /// The value as plain text (see [`plain_text`]).
     pub plain: String,
+    /// Where the value's baseline starts (DXF 10), in world coordinates
+    /// of [`Self::space`] -- the point to show a reader where it came
+    /// from. Absent when the value is written on a plane tilted out of the
+    /// world's, which no 2D position places exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_point: Option<Point2D>,
+    /// The space the value is drawn in, as [`crate::Hit::space`] names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
     pub confidence: Confidence,
 }
 
@@ -82,16 +91,39 @@ pub struct TextRef {
     pub text: String,
     /// The text as plain text (see [`plain_text`]).
     pub plain: String,
+    /// Where the text's baseline starts (DXF 10), in world coordinates of
+    /// [`Self::space`]. Absent for a text on a plane tilted out of the
+    /// world's, which no 2D position places exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_point: Option<Point2D>,
+    /// The space the text is drawn in, as [`crate::Hit::space`] names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
 }
 
 impl TextRef {
-    fn of(id: EntityId, text: &str) -> Self {
+    fn of(
+        id: EntityId,
+        text: &str,
+        start_point: Option<Point2D>,
+        spaces: &BTreeMap<EntityId, &str>,
+    ) -> Self {
         TextRef {
             id,
             text: text.to_string(),
             plain: plain_text(text),
+            start_point,
+            space: spaces.get(&id).map(|s| s.to_string()),
         }
     }
+}
+
+/// A text's start point in world coordinates, when its plane is the
+/// world's or a mirror of it.
+fn world_start(start_point: Point2D, extrusion: uncad_model::Point3D) -> Option<Point2D> {
+    Ocs::of(extrusion)
+        .and_then(|o| o.flat_map())
+        .map(|plan| plan.apply(start_point))
 }
 
 /// What a TEXT or ATTRIB reads as, without the codes it is written in: the
@@ -577,6 +609,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
     let mut dimensions = Vec::new();
     let mut tolerance_frames = Vec::new();
     let mut tables = Vec::new();
+    let spaces = crate::hit_test::spaces(db);
 
     for e in &db.entities {
         *by_type.entry(e.type_name().to_string()).or_insert(0) += 1;
@@ -619,6 +652,8 @@ pub fn summarize(db: &CadDatabase) -> Summary {
                     tag: a.tag.clone(),
                     value: a.text.clone(),
                     plain: plain_text(&a.text),
+                    start_point: world_start(a.start_point, a.extrusion),
+                    space: spaces.get(&a.common.id).map(|s| s.to_string()),
                     confidence: a.common.confidence.min(insert.common.confidence),
                 });
             }
@@ -652,7 +687,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         })
         .collect();
 
-    let (labelled_texts, unplaced_texts) = labelled_texts(db);
+    let (labelled_texts, unplaced_texts) = labelled_texts(db, &spaces);
     Summary {
         units: db.header.insunits.map(|code| DrawingUnits {
             code,
@@ -696,14 +731,17 @@ fn is_space(name: &str) -> bool {
 /// world's is not paired, since no 2D position places it exactly.
 /// The label-value pairs among the loose texts, and the loose texts that
 /// could not take part because their plane is tilted.
-fn labelled_texts(db: &CadDatabase) -> (Vec<LabelledText>, Vec<TextRef>) {
+fn labelled_texts(
+    db: &CadDatabase,
+    spaces: &BTreeMap<EntityId, &str>,
+) -> (Vec<LabelledText>, Vec<TextRef>) {
     let mut texts = Vec::new();
     let mut unplaced = Vec::new();
     for e in &db.entities {
         let Entity::Text(t) = e else { continue };
-        match Ocs::of(t.extrusion).and_then(|o| o.flat_map()) {
-            Some(plan) => texts.push((t, plan.apply(t.start_point))),
-            None => unplaced.push(TextRef::of(t.common.id, &t.text)),
+        match world_start(t.start_point, t.extrusion) {
+            Some(at) => texts.push((t, at)),
+            None => unplaced.push(TextRef::of(t.common.id, &t.text, None, spaces)),
         }
     }
     unplaced.sort_by_key(|t| t.id);
@@ -726,13 +764,13 @@ fn labelled_texts(db: &CadDatabase) -> (Vec<LabelledText>, Vec<TextRef>) {
         let mut values: Vec<_> = candidates
             .into_iter()
             .filter(|(_, at)| at.x - here.x == nearest)
-            .map(|(t, _)| *t)
+            .map(|&(t, at)| (t, at))
             .collect();
-        values.sort_by_key(|t| t.common.id);
-        for value in values {
+        values.sort_by_key(|(t, _)| t.common.id);
+        for (value, there) in values {
             pairs.push(LabelledText {
-                label: TextRef::of(label.common.id, &label.text),
-                value: TextRef::of(value.common.id, &value.text),
+                label: TextRef::of(label.common.id, &label.text, Some(here), spaces),
+                value: TextRef::of(value.common.id, &value.text, Some(there), spaces),
                 confidence: label.common.confidence.min(value.common.confidence),
             });
         }
