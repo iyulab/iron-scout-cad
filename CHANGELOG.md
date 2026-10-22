@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-22
+
 ### Added
 
 - The summary says where each text it lists starts and in which space: `start_point` (DXF 10, in world
