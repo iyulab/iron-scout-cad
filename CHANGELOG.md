@@ -7,6 +7,11 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- Each table in the summary names the space it is drawn in (`space`, as a hit names it), like the texts
+  do -- the point it is inserted at is only a place on a picture of that space.
+
 ## [0.12.0] - 2026-10-22
 
 ### Added

@@ -279,6 +279,9 @@ pub struct TableSummary {
     /// Where the table is inserted -- a point [`crate::hit_test`] finds it
     /// at.
     pub insertion_point: Point2D,
+    /// The space the table is drawn in, as [`crate::Hit::space`] names it
+    /// -- a point is only a place on a picture of that space.
+    pub space: Option<String>,
     /// The block that draws the table; what it draws is searched by
     /// [`crate::hit_test`] as a block reference's is.
     pub block: Ref<String>,
@@ -321,13 +324,14 @@ pub struct CellText {
 }
 
 impl TableSummary {
-    fn of(t: &AcadTableEntity) -> Self {
+    fn of(t: &AcadTableEntity, spaces: &BTreeMap<EntityId, &str>) -> Self {
         TableSummary {
             id: t.common.id,
             insertion_point: Point2D {
                 x: t.insertion_point.x,
                 y: t.insertion_point.y,
             },
+            space: spaces.get(&t.common.id).map(|s| s.to_string()),
             block: t.block_name.clone(),
             cells: t.grid.as_ref().map(|grid| TableCells {
                 rows: grid.rows.len(),
@@ -634,7 +638,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
             });
         }
         if let Entity::AcadTable(t) = e {
-            tables.push(TableSummary::of(t));
+            tables.push(TableSummary::of(t, &spaces));
         }
         if let Entity::Insert(insert) = e {
             match &insert.block_name {

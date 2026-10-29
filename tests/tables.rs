@@ -298,3 +298,39 @@ fn a_table_whose_rows_way_is_unknown_says_so_where_the_point_is_at_it() {
         .iter()
         .any(|n| n.reason == NotSearchedReason::TableCellsUnknown));
 }
+
+#[test]
+fn a_table_names_the_space_it_is_drawn_in() {
+    // Two tables, one in each space: the model lists every entity at the top level and each space block holds its own.
+    let in_model = table(7, "*T1", (10.0, 20.0), 0.0, grid());
+    let on_sheet = table(8, "*T1", (10.0, 20.0), 0.0, grid());
+    let mut db = drawing(vec![in_model.clone(), on_sheet.clone()]);
+    for (name, entity) in [("*Model_Space", in_model), ("*Paper_Space", on_sheet)] {
+        let record: BlockRecord = serde_json::from_value(json!({
+            "name": name,
+            "base_point": xyz(0.0, 0.0),
+            "entities": [entity],
+        }))
+        .expect("the space block deserializes");
+        db.tables.block_records.insert(record.name.clone(), record);
+    }
+
+    let s = summarize(&db);
+    let spaces: Vec<_> = s
+        .tables
+        .iter()
+        .map(|t| (t.id, t.space.as_deref()))
+        .collect();
+    assert_eq!(
+        spaces,
+        [
+            (EntityId::new(7), Some("*Model_Space")),
+            (EntityId::new(8), Some("*Paper_Space"))
+        ]
+    );
+    // A table no space block holds names no space: it is not guessed to be in the model.
+    let loose = summarize(&drawing(vec![table(9, "*T1", (0.0, 0.0), 0.0, grid())]));
+    assert_eq!(loose.tables[0].space, None);
+    let value = serde_json::to_value(&s).unwrap();
+    assert_eq!(value["tables"][0]["space"], "*Model_Space");
+}
