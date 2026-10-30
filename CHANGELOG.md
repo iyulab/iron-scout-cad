@@ -7,6 +7,18 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `DimensionSummary::block`: the anonymous block that draws the dimension, as the file names it
+  (the same fact `TableSummary::block` states for a table). A consumer that folds what a dimension
+  draws into the dimension, or tells it from the rest of the drawing, no longer has to guess the name.
+- `DrawingUnits::to_mm`: how many millimetres one of the drawing's units is, from the same table that
+  names the unit (`1.0` for `mm`, `25.4` for `in`); absent for `du`, where no unit is stated.
+
+### Changed
+
+- `DrawingUnits` no longer implements `Eq` (it now holds an `f64`).
+
 ## [0.14.0] - 2026-10-30
 
 ### Added

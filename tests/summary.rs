@@ -179,7 +179,11 @@ fn the_units_are_the_ones_the_header_states_and_unknown_otherwise() {
     let units = s.units.as_ref().expect("G1 states its units");
     assert_eq!((units.code, units.name.as_str()), (4, "mm"));
     let json = serde_json::to_value(&s).unwrap();
-    assert_eq!(json["units"], serde_json::json!({"code": 4, "name": "mm"}));
+    assert_eq!(units.to_mm, Some(1.0));
+    assert_eq!(
+        json["units"],
+        serde_json::json!({"code": 4, "name": "mm", "to_mm": 1.0})
+    );
 
     // G9's header states none: the summary says so instead of assuming one.
     let s = summarize(&g9());
@@ -192,6 +196,14 @@ fn the_units_are_the_ones_the_header_states_and_unknown_otherwise() {
     db.header.insunits = Some(99);
     let units = summarize(&db).units.unwrap();
     assert_eq!((units.code, units.name.as_str()), (99, "du"));
+    // No unit, no conversion: the field is left out rather than guessed.
+    assert_eq!(units.to_mm, None);
+    let json = serde_json::to_value(summarize(&db).units).unwrap();
+    assert!(json.get("to_mm").is_none());
+
+    // A unit the table defines converts by the table's factor.
+    db.header.insunits = Some(1);
+    assert_eq!(summarize(&db).units.unwrap().to_mm, Some(25.4));
 }
 
 /// G7 with a second text drawn exactly on top of its value `target`, under
@@ -345,6 +357,12 @@ fn every_dimension_is_listed_as_the_file_states_it() {
     assert_eq!(d(300).plain, None);
     assert_eq!(d(302).measurement, None);
     assert_eq!(d(302).style, Ref::Unresolved("NOT-DECLARED".into()));
+    // The block that draws each dimension, as the file names it: a
+    // consumer that must tell what a dimension draws from the rest of the
+    // drawing needs no guess at the name.
+    for (id, block) in [(298, "*D1"), (301, "*D4"), (304, "*D7")] {
+        assert_eq!(d(id).block, Ref::Resolved(block.into()), "{id}");
+    }
 }
 
 /// G5 states no tolerance anywhere: each dimension carries its style's

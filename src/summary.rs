@@ -172,6 +172,10 @@ fn plain(text: &str, kind: TextKind) -> String {
 #[non_exhaustive]
 pub struct DimensionSummary {
     pub id: EntityId,
+    /// The anonymous block that draws the dimension -- its lines, arrowheads
+    /// and text; what it draws is searched by [`crate::hit_test`] as a block
+    /// reference's is.
+    pub block: Ref<String>,
     /// What the dimension measures; `None` when the file does not state it.
     pub kind: Option<DimensionKind>,
     /// The measurement the drawing recorded (DXF 42), in the drawing's
@@ -390,6 +394,7 @@ impl DimensionSummary {
             .unwrap_or_default();
         DimensionSummary {
             id: d.common.id,
+            block: d.block_name.clone(),
             kind: d.kind,
             measurement: d.measurement,
             plain: literal.map(|text| plain(text, TextKind::MText)),
@@ -453,7 +458,7 @@ pub enum Lookup<T> {
 }
 
 /// The unit the drawing's header states for its numbers (`$INSUNITS`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct DrawingUnits {
     /// The code as the file states it.
@@ -462,6 +467,11 @@ pub struct DrawingUnits {
     /// `"m"`, ... -- or `"du"` ("drawing units") for code 0 (unitless) and
     /// for a code the table does not define.
     pub name: String,
+    /// How many millimetres one of the drawing's units is, from that same
+    /// table (`1.0` for `"mm"`, `25.4` for `"in"`). `None` for `"du"`: a
+    /// length the drawing states without a unit is not converted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_mm: Option<f64>,
 }
 
 /// The identifiers a drawing's header states for where it came from and
@@ -693,9 +703,13 @@ pub fn summarize(db: &CadDatabase) -> Summary {
 
     let (labelled_texts, unplaced_texts) = labelled_texts(db, &spaces);
     Summary {
-        units: db.header.insunits.map(|code| DrawingUnits {
-            code,
-            name: Units::from_insunits(code).name,
+        units: db.header.insunits.map(|code| {
+            let unit = Units::from_insunits(code);
+            DrawingUnits {
+                code,
+                name: unit.name,
+                to_mm: unit.to_mm,
+            }
         }),
         drawing_ids: DrawingIds {
             fingerprint: db.header.fingerprintguid.clone(),
