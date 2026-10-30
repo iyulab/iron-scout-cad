@@ -7,10 +7,16 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-30
+
 ### Added
 
 - Each table in the summary names the space it is drawn in (`space`, as a hit names it), like the texts
   do -- the point it is inserted at is only a place on a picture of that space.
+
+### Changed
+
+- Built on `uncad-model` 0.10.0.
 
 ## [0.12.0] - 2026-10-22
 
