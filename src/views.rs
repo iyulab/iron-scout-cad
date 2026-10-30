@@ -27,6 +27,7 @@
 //! A view is described by its size, never its place, so moving a view on the
 //! sheet or copying the part to another sheet changes nothing here.
 
+use crate::moments::Moments;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -59,6 +60,14 @@ pub struct View {
     /// The share of the view's box the circles cover, in parts per million:
     /// the sum of the circles' areas over the box's area, rounded.
     pub hole_ratio_ppm: u64,
+    /// The second moments of the outline the view's lines and arcs draw,
+    /// each point weighted by its length, about the centre of the view's box
+    /// and over its size: `[E[x²]/w², E[y²]/h², E[xy]/(w·h)]` for the box's
+    /// width `w` and height `h`, each times 10⁶ and rounded. Shapes that are
+    /// alike give alike integers whatever their size. `None` when the view
+    /// holds no line or arc, or its box has no width or no height; circles,
+    /// ellipses and splines do not weigh.
+    pub outline_moments: Option<[i64; 3]>,
 }
 
 /// A closed polyline that is the drawing space of an A-series sheet, and
@@ -148,6 +157,9 @@ pub(crate) struct Item {
     pub rect: Rect,
     pub entities: BTreeMap<String, u64>,
     pub circle_diameters_um: BTreeMap<u64, u64>,
+    /// The point, in millimetres, `moments` are taken about.
+    pub origin: [f64; 2],
+    pub moments: Moments,
     /// Whether this item is a closed four-sided polyline along the axes: a
     /// candidate for a sheet frame.
     pub frame_candidate: bool,
@@ -318,7 +330,17 @@ pub(crate) fn separate(items: &[Item]) -> Layer2 {
                 .expect("a group holds an item");
             let mut entities: BTreeMap<String, u64> = BTreeMap::new();
             let mut diameters: BTreeMap<u64, u64> = BTreeMap::new();
+            // The moments of every item about the centre of the view's box.
+            let centre = [
+                (rect.min_x + rect.max_x) as f64 / 2.0 / 1000.0,
+                (rect.min_y + rect.max_y) as f64 / 2.0 / 1000.0,
+            ];
+            let mut moments = Moments::default();
             for &at in &group {
+                moments.add(&items[at].moments.about([
+                    items[at].origin[0] - centre[0],
+                    items[at].origin[1] - centre[1],
+                ]));
                 for (name, n) in &items[at].entities {
                     *entities.entry(name.clone()).or_insert(0) += n;
                 }
@@ -343,6 +365,8 @@ pub(crate) fn separate(items: &[Item]) -> Layer2 {
                     entities,
                     circle_diameters_um: diameters,
                     hole_ratio_ppm,
+                    outline_moments: moments
+                        .second(rect.width() as f64 / 1000.0, rect.height() as f64 / 1000.0),
                 },
             )
         })

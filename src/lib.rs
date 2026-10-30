@@ -26,6 +26,7 @@ mod extent;
 mod geometry;
 mod hit_test;
 mod limits;
+mod moments;
 mod relate;
 mod select;
 mod signature;

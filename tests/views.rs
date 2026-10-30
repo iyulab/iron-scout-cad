@@ -246,3 +246,103 @@ fn views_past_the_limit_are_counted_not_listed() {
     // more: twelve, of which eight are listed.
     assert_eq!(s.views_truncated, 12 - 8);
 }
+
+/// The second moments are worked by hand from the outline each view draws,
+/// about the centre of its box, over the box's size.
+///
+/// The front view is a 120 by 60 rectangle: along its sides E[x^2] is
+/// (2 * 120 * 120^2 / 12 + 2 * 60 * 60^2) / 360 = 2000 mm^2 = 0.138889 w^2 and
+/// E[y^2] is (2 * 120 * 30^2 + 2 * 60 * 60^2 / 12) / 360 = 700 mm^2 =
+/// 0.194444 h^2; the product vanishes by symmetry. The two holes are circles
+/// and do not weigh.
+#[test]
+fn the_outline_of_each_view_is_weighed_by_length() {
+    let views = signature(&g22()).views.unwrap();
+    assert_eq!(views[0].outline_moments, Some([138_889, 194_444, 0]));
+    // The top view adds two vertical lines 30 mm either side of the centre.
+    assert_eq!(views[1].outline_moments, Some([112_500, 183_333, 0]));
+    // The side view adds a line across its middle.
+    assert_eq!(views[2].outline_moments, Some([166_667, 125_000, 0]));
+}
+
+fn scaled_by_two(mut db: CadDatabase) -> CadDatabase {
+    for e in model_space(&mut db).iter_mut() {
+        match e {
+            Entity::Line(l) => {
+                for p in [&mut l.start_point, &mut l.end_point] {
+                    p.x *= 2.0;
+                    p.y *= 2.0;
+                }
+            }
+            Entity::Circle(c) => {
+                c.center.x *= 2.0;
+                c.center.y *= 2.0;
+                c.radius *= 2.0;
+            }
+            Entity::LwPolyline(p) => {
+                for v in &mut p.vertices {
+                    v.point.x *= 2.0;
+                    v.point.y *= 2.0;
+                }
+            }
+            _ => {}
+        }
+    }
+    db
+}
+
+#[test]
+fn the_same_shape_twice_the_size_has_the_same_moments() {
+    let (a, b) = (signature(&g22()), signature(&scaled_by_two(g22())));
+    let (va, vb) = (a.views.unwrap(), b.views.unwrap());
+    // The frame no longer fits a sheet at this size, so it is a view of its
+    // own: the three views of the part are the next three by size.
+    let part = |views: &[iron_scout_cad::View]| -> Vec<Option<[i64; 3]>> {
+        let mut found: Vec<_> = views
+            .iter()
+            .filter(|v| v.bbox_um[0] <= 240_000 && v.bbox_um[1] <= 120_000)
+            .map(|v| (v.bbox_um, v.outline_moments))
+            .collect();
+        found.sort_by_key(|(bbox, _)| std::cmp::Reverse(bbox[0] * bbox[1]));
+        found.into_iter().map(|(_, m)| m).collect()
+    };
+    assert_eq!(part(&va).len(), 3);
+    assert_eq!(part(&va), part(&vb));
+}
+
+/// An upper semicircle of radius 10 from a bulged polyline segment: about the
+/// centre of its box (20 by 10), E[x^2] = r^2 / 2 = 50 = 0.125 w^2,
+/// E[(y - 5)^2] = 50 - 10 * (2r / pi) + 25 = 11.338 mm^2 = 0.11338 h^2 and the
+/// product vanishes.
+#[test]
+fn an_arc_is_weighed_along_its_length() {
+    let mut db = g22();
+    let entities = model_space(&mut db);
+    entities.retain(|e| matches!(e, Entity::LwPolyline(p) if p.vertices[0].point.x == 50.0 && p.vertices[0].point.y == 150.0));
+    let Entity::LwPolyline(p) = &mut entities[0] else {
+        panic!("a polyline");
+    };
+    let mut start = p.vertices[0];
+    start.point.x = 10.0;
+    start.point.y = 0.0;
+    start.bulge = 1.0;
+    let mut end = p.vertices[1];
+    end.point.x = -10.0;
+    end.point.y = 0.0;
+    end.bulge = 0.0;
+    p.vertices = vec![start, end];
+    p.closed = false;
+    let views = signature(&db).views.unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].bbox_um, [20_000, 10_000]);
+    assert_eq!(views[0].outline_moments, Some([125_000, 113_380, 0]));
+}
+
+#[test]
+fn a_view_of_circles_alone_has_no_outline_moments() {
+    let mut db = g22();
+    model_space(&mut db).retain(|e| matches!(e, Entity::Circle(_)));
+    let views = signature(&db).views.unwrap();
+    assert!(!views.is_empty());
+    assert!(views.iter().all(|v| v.outline_moments.is_none()));
+}

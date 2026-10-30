@@ -12,7 +12,10 @@ bumps the minor version.
 - The shape signature separates the views a sheet holds (`signature_version` 2). `views` lists them,
   largest box first and at most `MAX_VIEWS` (8; `views_truncated` counts the rest), each with its
   box size in micrometres (`bbox_um`), the geometry it holds by type (`entities`), its circle
-  diameters (`circle_diameters_um`) and the share of its box the circles cover (`hole_ratio_ppm`).
+  diameters (`circle_diameters_um`), the share of its box the circles cover (`hole_ratio_ppm`) and
+  the second moments of the outline its lines and arcs draw (`outline_moments`: each point weighted
+  by length, about the centre of the view's box and over its size, times 10^6 -- shapes that are
+  alike give alike integers whatever their size; `None` when the view has no line or arc).
   Two top-level entities belong to one view when their boxes lie within `view_gap_um` (5 mm) of each
   other on both axes, directly or through others; a view is described by its size, never its place,
   so moving a view on the sheet changes nothing. `views` is `None` when the header states no unit

@@ -46,8 +46,10 @@ use uncad_model::model::{DimensionKind, Entity, InsertEntity};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, Ocs, Point2D, Point3D};
 
-use crate::extent::Reach;
+use crate::extent::{linear, Reach};
+use crate::geometry::{in_plane, xy};
 use crate::limits::{NotEntered, Walk};
+use crate::moments::Moments;
 use crate::summary::DimensionSummary;
 use crate::views::{self, Item, Rect, SheetMatch, View, VIEW_GAP_UM};
 use std::collections::BTreeSet;
@@ -161,28 +163,38 @@ pub fn signature(db: &CadDatabase) -> Signature {
         let at = Transform::identity();
         for e in &block.entities {
             counter.item = ItemCount::default();
-            counter.count(e, &at);
-            let (Some(to_mm), true) = (to_mm, is_item(e)) else {
-                continue;
+            // The item's box first: the moments are taken about its centre.
+            let rect = match (to_mm, is_item(e)) {
+                (Some(_), true) if items.len() >= views::MAX_ITEMS => {
+                    too_many = true;
+                    None
+                }
+                (Some(to_mm), true) => {
+                    let mut points = Vec::new();
+                    reach.entity(e, &Affine2::IDENTITY, &mut points, &mut BTreeSet::new());
+                    let micrometres = |v: f64| (v * to_mm * 1000.0).round() as i64;
+                    crate::extent::bounds(&points).map(|b| Rect {
+                        min_x: micrometres(b.min.x),
+                        min_y: micrometres(b.min.y),
+                        max_x: micrometres(b.max.x),
+                        max_y: micrometres(b.max.y),
+                    })
+                }
+                _ => None,
             };
-            if items.len() >= views::MAX_ITEMS {
-                too_many = true;
-                continue;
+            if let Some(r) = &rect {
+                counter.item.origin = [
+                    (r.min_x + r.max_x) as f64 / 2.0 / 1000.0,
+                    (r.min_y + r.max_y) as f64 / 2.0 / 1000.0,
+                ];
             }
-            let mut points = Vec::new();
-            reach.entity(e, &Affine2::IDENTITY, &mut points, &mut BTreeSet::new());
-            let Some(bounds) = crate::extent::bounds(&points) else {
-                continue;
-            };
-            let micrometres = |v: f64| (v * to_mm * 1000.0).round() as i64;
+            counter.count(e, &at);
+            let Some(rect) = rect else { continue };
             let item = std::mem::take(&mut counter.item);
             items.push(Item {
-                rect: Rect {
-                    min_x: micrometres(bounds.min.x),
-                    min_y: micrometres(bounds.min.y),
-                    max_x: micrometres(bounds.max.x),
-                    max_y: micrometres(bounds.max.y),
-                },
+                rect,
+                origin: item.origin,
+                moments: item.moments,
                 entities: item.entities,
                 circle_diameters_um: item.diameters,
                 frame_candidate: is_axis_rectangle(e),
@@ -260,6 +272,10 @@ struct Transform {
     /// Columns: where the block's x, y and z unit vectors go.
     columns: [Point3D; 3],
     uniform: Option<f64>,
+    /// Where the block's own coordinates go in the world's plan, translation
+    /// included; `None` when the reference sits on a plane no 2D map places
+    /// exactly. Positions are used by layer 2 alone.
+    place: Option<Affine2>,
 }
 
 impl Transform {
@@ -267,6 +283,7 @@ impl Transform {
         Transform {
             columns: [p3(1.0, 0.0, 0.0), p3(0.0, 1.0, 0.0), p3(0.0, 0.0, 1.0)],
             uniform: Some(1.0),
+            place: Some(Affine2::IDENTITY),
         }
     }
 
@@ -282,7 +299,7 @@ impl Transform {
     /// This transform followed by `insert`'s placement of its block: the
     /// block's axes scaled, rotated about its z, then laid in the plane
     /// its extrusion names.
-    fn then(&self, insert: &InsertEntity) -> Option<Self> {
+    fn then(&self, insert: &InsertEntity, base_point: Point3D) -> Option<Self> {
         let ocs = Ocs::of(insert.extrusion)?;
         let (s, c) = insert.rotation.sin_cos();
         let (x, y, z) = (ocs.x_axis(), ocs.y_axis(), ocs.z_axis());
@@ -303,7 +320,15 @@ impl Transform {
             }
             _ => None,
         };
-        Some(Transform { columns, uniform })
+        let place = self
+            .place
+            .zip(insert.world_transform(base_point))
+            .map(|(outer, own)| own.then(&outer));
+        Some(Transform {
+            columns,
+            uniform,
+            place,
+        })
     }
 }
 
@@ -330,6 +355,11 @@ struct Counter<'a> {
 struct ItemCount {
     entities: BTreeMap<String, u64>,
     diameters: BTreeMap<u64, u64>,
+    /// The point, in millimetres, the moments are taken about: the centre of
+    /// the item's box.
+    origin: [f64; 2],
+    /// The length-weighted moments of its lines and arcs.
+    moments: Moments,
 }
 
 fn bump(map: &mut BTreeMap<String, u64>, key: &str) {
@@ -351,6 +381,36 @@ impl Counter<'_> {
         bump(&mut self.item.entities, name);
     }
 
+    /// Adds a straight piece, its ends in the world's plan in drawing
+    /// units, to the outline of the top-level entity being walked.
+    fn outline_line(&mut self, from: Point2D, to: Point2D) {
+        let Some(k) = self.to_mm else { return };
+        let o = self.item.origin;
+        self.item.moments.segment(
+            [from.x * k - o[0], from.y * k - o[1]],
+            [to.x * k - o[0], to.y * k - o[1]],
+        );
+    }
+
+    /// Adds an arc of `radius` about `center`, both in the coordinates `m`
+    /// takes to the world's plan, from `start` through `sweep` there. `m` is
+    /// a similarity (the caller has checked the scale is the same on every
+    /// axis), so the arc stays circular.
+    fn outline_arc(&mut self, m: &Affine2, center: Point2D, radius: f64, start: f64, sweep: f64) {
+        let Some(k) = self.to_mm else { return };
+        let o = self.item.origin;
+        let c = m.apply(center);
+        let u = linear(m, Point2D { x: radius, y: 0.0 });
+        let v = linear(m, Point2D { x: 0.0, y: radius });
+        self.item.moments.arc(
+            [c.x * k - o[0], c.y * k - o[1]],
+            [u.x * k, u.y * k],
+            [v.x * k, v.y * k],
+            start,
+            sweep,
+        );
+    }
+
     fn walk(&mut self, entities: &[Entity], at: &Transform) {
         for e in entities {
             self.count(e, at);
@@ -363,6 +423,12 @@ impl Counter<'_> {
                 self.note("LINE");
                 let v = sub(l.end_point, l.start_point);
                 self.line(norm(at.apply(v)));
+                match at.place {
+                    Some(t) => {
+                        self.outline_line(t.apply(xy(l.start_point)), t.apply(xy(l.end_point)))
+                    }
+                    None => bump(&mut self.not_measured, "OUTLINE_UNPLACED"),
+                }
             }
             Entity::Circle(c) => {
                 self.note("CIRCLE");
@@ -379,7 +445,18 @@ impl Counter<'_> {
             Entity::Arc(a) => {
                 self.note("ARC");
                 match at.uniform {
-                    Some(u) => self.arc(a.radius * u),
+                    Some(u) => {
+                        self.arc(a.radius * u);
+                        let m = at.place.and_then(|t| in_plane(a.extrusion, &t));
+                        match (m, a.sweep()) {
+                            (Some(m), Some(sweep)) => {
+                                self.outline_arc(&m, xy(a.center), a.radius, a.start_angle, sweep)
+                            }
+                            (None, Some(_)) => bump(&mut self.not_measured, "OUTLINE_UNPLACED"),
+                            // An arc with equal angles has no sweep to weigh.
+                            (_, None) => {}
+                        }
+                    }
                     None => bump(&mut self.not_measured, "ARC_NON_UNIFORM_SCALE"),
                 }
             }
@@ -390,6 +467,12 @@ impl Counter<'_> {
                     return;
                 };
                 let in_plane = |v: Point2D| add(scale(ocs.x_axis(), v.x), scale(ocs.y_axis(), v.y));
+                let placed = at
+                    .place
+                    .and_then(|t| crate::geometry::in_plane(p.extrusion, &t));
+                if placed.is_none() {
+                    bump(&mut self.not_measured, "OUTLINE_UNPLACED");
+                }
                 for segment in uncad_model::bulge::segments(&p.vertices, p.closed) {
                     match segment.arc {
                         None => {
@@ -399,11 +482,25 @@ impl Counter<'_> {
                                 y: segment.to.y - segment.from.y,
                             };
                             self.line(norm(at.apply(in_plane(v))));
+                            if let Some(m) = placed {
+                                self.outline_line(m.apply(segment.from), m.apply(segment.to));
+                            }
                         }
                         Some(arc) => {
                             self.note("POLYLINE_ARC_SEGMENT");
                             match at.uniform {
-                                Some(u) => self.arc(arc.radius * u),
+                                Some(u) => {
+                                    self.arc(arc.radius * u);
+                                    if let Some(m) = placed {
+                                        self.outline_arc(
+                                            &m,
+                                            arc.center,
+                                            arc.radius,
+                                            arc.start_angle,
+                                            arc.sweep,
+                                        );
+                                    }
+                                }
                                 None => bump(
                                     &mut self.not_measured,
                                     "POLYLINE_ARC_SEGMENT_NON_UNIFORM_SCALE",
@@ -464,10 +561,9 @@ impl Counter<'_> {
             bump(&mut self.excluded, name);
             return;
         }
-        let (block, inner) = match self
-            .blocks
-            .enter(self.tables, &i.block_name, |_| at.then(i))
-        {
+        let (block, inner) = match self.blocks.enter(self.tables, &i.block_name, |block| {
+            at.then(i, block.base_point)
+        }) {
             Ok(entered) => entered,
             Err(why) => {
                 let key = match why {
