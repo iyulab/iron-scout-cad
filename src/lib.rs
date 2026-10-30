@@ -30,6 +30,7 @@ mod relate;
 mod select;
 mod signature;
 mod summary;
+mod views;
 
 pub use extent::{BoundedBy, Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason, TableCellHit};
@@ -44,5 +45,6 @@ pub use summary::{
     DimensionSummary, DrawingIds, DrawingUnits, LabelledText, LayerSummary, Lookup, StyleTolerance,
     Summary, TableCells, TableSummary, TextRef, TextStack, ToleranceFrame, UnresolvedInsert,
 };
+pub use views::{SheetFit, SheetMatch, View, MAX_ITEMS, MAX_VIEWS, VIEW_GAP_UM};
 
 pub use uncad_model::CadDatabase;

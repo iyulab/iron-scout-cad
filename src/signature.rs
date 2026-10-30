@@ -23,7 +23,7 @@
 //! expanded blocks. Each such reference is counted in `not_measured`, so a
 //! signature short of what the drawing holds says so.
 //!
-//! # Quantization (`signature_version` 1)
+//! # Quantization (`signature_version` 2)
 //!
 //! - A length is taken to millimetres through the unit the header states and
 //!   rounded to the nearest micrometre (`f64::round`, halves away from zero).
@@ -46,12 +46,16 @@ use uncad_model::model::{DimensionKind, Entity, InsertEntity};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, Ocs, Point2D, Point3D};
 
+use crate::extent::Reach;
 use crate::limits::{NotEntered, Walk};
 use crate::summary::DimensionSummary;
+use crate::views::{self, Item, Rect, SheetMatch, View, VIEW_GAP_UM};
+use std::collections::BTreeSet;
+use uncad_model::Affine2;
 
 /// The quantization this crate's signatures follow; see the module doc. A
 /// change to any rule there is a new version.
-pub const SIGNATURE_VERSION: u32 = 1;
+pub const SIGNATURE_VERSION: u32 = 2;
 
 /// A drawing's shape signature. See the module doc for what is counted and
 /// how lengths are quantized.
@@ -94,6 +98,22 @@ pub struct Signature {
     /// (`INSERT_BUDGET_EXHAUSTED`). Either of the last two means the other
     /// components are short of what the drawing holds.
     pub not_measured: BTreeMap<String, u64>,
+    /// The views the sheet holds, largest box first, at most
+    /// [`MAX_VIEWS`](crate::MAX_VIEWS) (layer 2; see the module doc of
+    /// `views`). `None` when the drawing's unit is not stated, or when it
+    /// holds more items than the walk takes ([`MAX_ITEMS`](crate::MAX_ITEMS):
+    /// `not_measured` says so).
+    pub views: Option<Vec<View>>,
+    /// The views left out of `views` for being past the limit.
+    pub views_truncated: u64,
+    /// The gap, in micrometres, under which two items belong to one view
+    /// ([`VIEW_GAP_UM`]).
+    pub view_gap_um: u64,
+    /// The sheet frame found among the items, with every way its size is the
+    /// drawing space of a sheet; `None` when no top-level polyline is one.
+    /// Without a frame everything on the sheet is separated into views
+    /// alike.
+    pub sheet_match: Option<SheetMatch>,
 }
 
 /// How many counted dimensions state a tolerance, by where they state it --
@@ -127,16 +147,53 @@ pub fn signature(db: &CadDatabase) -> Signature {
         excluded: BTreeMap::new(),
         not_measured: BTreeMap::new(),
         blocks: Walk::default(),
+        item: ItemCount::default(),
     };
     let model = db
         .tables
         .block_records
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("*Model_Space"));
+    let mut items: Vec<Item> = Vec::new();
+    let mut reach = Reach::drawn(&db.tables);
+    let mut too_many = false;
     if let Some((_, block)) = model {
-        counter.walk(&block.entities, &Transform::identity());
+        let at = Transform::identity();
+        for e in &block.entities {
+            counter.item = ItemCount::default();
+            counter.count(e, &at);
+            let (Some(to_mm), true) = (to_mm, is_item(e)) else {
+                continue;
+            };
+            if items.len() >= views::MAX_ITEMS {
+                too_many = true;
+                continue;
+            }
+            let mut points = Vec::new();
+            reach.entity(e, &Affine2::IDENTITY, &mut points, &mut BTreeSet::new());
+            let Some(bounds) = crate::extent::bounds(&points) else {
+                continue;
+            };
+            let micrometres = |v: f64| (v * to_mm * 1000.0).round() as i64;
+            let item = std::mem::take(&mut counter.item);
+            items.push(Item {
+                rect: Rect {
+                    min_x: micrometres(bounds.min.x),
+                    min_y: micrometres(bounds.min.y),
+                    max_x: micrometres(bounds.max.x),
+                    max_y: micrometres(bounds.max.y),
+                },
+                entities: item.entities,
+                circle_diameters_um: item.diameters,
+                frame_candidate: is_axis_rectangle(e),
+            });
+        }
+    }
+    if too_many {
+        bump(&mut counter.not_measured, "VIEW_ITEMS_OVER_LIMIT");
     }
     let known = to_mm.is_some();
+    let layer2 = (known && !too_many).then(|| views::separate(&items));
     Signature {
         signature_version: SIGNATURE_VERSION,
         entities: counter.entities,
@@ -147,7 +204,52 @@ pub fn signature(db: &CadDatabase) -> Signature {
         tolerances: counter.tolerances,
         excluded_inserts: counter.excluded,
         not_measured: counter.not_measured,
+        views_truncated: layer2.as_ref().map_or(0, |l| l.truncated),
+        sheet_match: layer2.as_ref().and_then(|l| l.sheet_match.clone()),
+        views: layer2.map(|l| l.views),
+        view_gap_um: VIEW_GAP_UM,
     }
+}
+
+/// Whether a top-level entity is an item of layer 2: one that layer 1
+/// measures as geometry. A block reference with attributes is not (it is a
+/// title block or the like, listed in `excluded_inserts`).
+fn is_item(e: &Entity) -> bool {
+    match e {
+        Entity::Line(_)
+        | Entity::Circle(_)
+        | Entity::Arc(_)
+        | Entity::LwPolyline(_)
+        | Entity::Polyline2D(_)
+        | Entity::Ellipse(_)
+        | Entity::Spline(_) => true,
+        Entity::Insert(i) => i.attribs.is_empty(),
+        _ => false,
+    }
+}
+
+/// Whether `e` is a closed polyline of four straight sides along the axes.
+fn is_axis_rectangle(e: &Entity) -> bool {
+    let (Entity::LwPolyline(p) | Entity::Polyline2D(p)) = e else {
+        return false;
+    };
+    let world_z = Point3D {
+        x: 0.0,
+        y: 0.0,
+        z: 1.0,
+    };
+    if !p.closed || p.vertices.len() != 4 || p.extrusion != world_z {
+        return false;
+    }
+    if p.vertices.iter().any(|v| v.bulge != 0.0) {
+        return false;
+    }
+    let v = &p.vertices;
+    (0..4).all(|i| {
+        let (a, b) = (v[i].point, v[(i + 1) % 4].point);
+        // Each side is horizontal or vertical, and has length.
+        (a.x == b.x) != (a.y == b.y)
+    })
 }
 
 /// The linear part of a block reference's placement, from a block's own
@@ -218,6 +320,16 @@ struct Counter<'a> {
     not_measured: BTreeMap<String, u64>,
     /// The blocks being expanded, and what expanding them has cost.
     blocks: Walk,
+    /// What the top-level entity being walked counted, for layer 2.
+    item: ItemCount,
+}
+
+/// What one top-level entity counted: the part of `entities` and the circle
+/// diameters that came from it.
+#[derive(Default)]
+struct ItemCount {
+    entities: BTreeMap<String, u64>,
+    diameters: BTreeMap<u64, u64>,
 }
 
 fn bump(map: &mut BTreeMap<String, u64>, key: &str) {
@@ -232,6 +344,13 @@ fn bump(map: &mut BTreeMap<String, u64>, key: &str) {
 }
 
 impl Counter<'_> {
+    /// Counts one geometry entity of type `name`, in the drawing and in the
+    /// top-level entity being walked.
+    fn note(&mut self, name: &str) {
+        bump(&mut self.entities, name);
+        bump(&mut self.item.entities, name);
+    }
+
     fn walk(&mut self, entities: &[Entity], at: &Transform) {
         for e in entities {
             self.count(e, at);
@@ -241,30 +360,31 @@ impl Counter<'_> {
     fn count(&mut self, e: &Entity, at: &Transform) {
         match e {
             Entity::Line(l) => {
-                bump(&mut self.entities, "LINE");
+                self.note("LINE");
                 let v = sub(l.end_point, l.start_point);
                 self.line(norm(at.apply(v)));
             }
             Entity::Circle(c) => {
-                bump(&mut self.entities, "CIRCLE");
+                self.note("CIRCLE");
                 match at.uniform {
                     Some(u) => {
                         if let Some(um) = self.micrometres(2.0 * c.radius * u) {
                             *self.diameters.entry(um).or_insert(0) += 1;
+                            *self.item.diameters.entry(um).or_insert(0) += 1;
                         }
                     }
                     None => bump(&mut self.not_measured, "CIRCLE_NON_UNIFORM_SCALE"),
                 }
             }
             Entity::Arc(a) => {
-                bump(&mut self.entities, "ARC");
+                self.note("ARC");
                 match at.uniform {
                     Some(u) => self.arc(a.radius * u),
                     None => bump(&mut self.not_measured, "ARC_NON_UNIFORM_SCALE"),
                 }
             }
             Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-                bump(&mut self.entities, e.type_name());
+                self.note(e.type_name());
                 let Some(ocs) = Ocs::of(p.extrusion) else {
                     bump(&mut self.not_measured, e.type_name());
                     return;
@@ -273,7 +393,7 @@ impl Counter<'_> {
                 for segment in uncad_model::bulge::segments(&p.vertices, p.closed) {
                     match segment.arc {
                         None => {
-                            bump(&mut self.entities, "POLYLINE_LINE_SEGMENT");
+                            self.note("POLYLINE_LINE_SEGMENT");
                             let v = Point2D {
                                 x: segment.to.x - segment.from.x,
                                 y: segment.to.y - segment.from.y,
@@ -281,7 +401,7 @@ impl Counter<'_> {
                             self.line(norm(at.apply(in_plane(v))));
                         }
                         Some(arc) => {
-                            bump(&mut self.entities, "POLYLINE_ARC_SEGMENT");
+                            self.note("POLYLINE_ARC_SEGMENT");
                             match at.uniform {
                                 Some(u) => self.arc(arc.radius * u),
                                 None => bump(
@@ -294,7 +414,7 @@ impl Counter<'_> {
                 }
             }
             Entity::Ellipse(_) | Entity::Spline(_) | Entity::Point(_) => {
-                bump(&mut self.entities, e.type_name());
+                self.note(e.type_name());
             }
             Entity::Insert(i) => self.insert(i, at),
             Entity::Dimension(d) => {

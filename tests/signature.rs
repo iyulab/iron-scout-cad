@@ -71,7 +71,7 @@ fn the_plate_counts_its_outline_holes_and_dimensions_and_reports_the_title_block
 }
 
 #[test]
-fn one_hole_made_larger_differs_in_the_diameters_alone() {
+fn one_hole_made_larger_differs_in_the_diameters_and_the_view_that_holds_it() {
     let before = g1();
     let mut after = before.clone();
     let hole = model_space(&mut after)
@@ -83,10 +83,21 @@ fn one_hole_made_larger_differs_in_the_diameters_alone() {
         .expect("a hole");
     hole.radius = 6.0;
     let (a, b) = (signature(&before), signature(&after));
-    assert_eq!(differing(&a, &b), ["circle_diameters_um"]);
+    // The plate is one view, so the change shows there as well as in the
+    // drawing's own count.
+    assert_eq!(differing(&a, &b), ["circle_diameters_um", "views"]);
     assert_eq!(
         b.circle_diameters_um,
         Some([(10_000, 3), (12_000, 1)].into_iter().collect())
+    );
+    let (va, vb) = (a.views.unwrap(), b.views.unwrap());
+    assert_eq!(va.len(), 1);
+    assert_eq!(vb.len(), 1);
+    assert_eq!(va[0].bbox_um, vb[0].bbox_um);
+    assert_eq!(va[0].entities, vb[0].entities);
+    assert_eq!(
+        vb[0].circle_diameters_um,
+        [(10_000, 3), (12_000, 1)].into_iter().collect()
     );
 }
 

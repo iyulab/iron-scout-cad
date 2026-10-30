@@ -6,7 +6,7 @@ Copies of what the `uncad-model` repository's golden writer produces, one expect
 |---|---|
 | `<case>.expected.json` | The model a reader must produce from that case's synthetic drawing; the spec is the oracle |
 
-Cases here: `g1` (a general part with a title block), `g2` (blocks nested three deep -- a line reached through three references), `g5` (a drawing that is mostly dimensions), `g6` (two coincident lines), `g7` (a title block of loose texts), `g8` (a title block in Korean, CP949 in the file), `g9` (the same title block twice, two drawing numbers), `g10` (a reference to a block that does not exist), `g21` (the ways a drawing states a tolerance). The tests read these models directly -- no parser is involved -- and check what this crate says about them against the spec.
+Cases here: `g1` (a general part with a title block), `g2` (blocks nested three deep -- a line reached through three references), `g5` (a drawing that is mostly dimensions), `g6` (two coincident lines), `g7` (a title block of loose texts), `g8` (a title block in Korean, CP949 in the file), `g9` (the same title block twice, two drawing numbers), `g10` (a reference to a block that does not exist), `g21` (the ways a drawing states a tolerance) and `g22` (a sheet of three views inside a frame: a closed rectangle the size of an A3 drawing space, a plate with two holes seen from the front, the top and the side, and a line past the frame). The tests read these models directly -- no parser is involved -- and check what this crate says about them against the spec.
 
 The files are generated, not hand-written. To regenerate after a change to the writer or the spec, from a checkout of `uncad-model`:
 

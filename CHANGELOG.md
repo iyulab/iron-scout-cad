@@ -7,6 +7,30 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- The shape signature separates the views a sheet holds (`signature_version` 2). `views` lists them,
+  largest box first and at most `MAX_VIEWS` (8; `views_truncated` counts the rest), each with its
+  box size in micrometres (`bbox_um`), the geometry it holds by type (`entities`), its circle
+  diameters (`circle_diameters_um`) and the share of its box the circles cover (`hole_ratio_ppm`).
+  Two top-level entities belong to one view when their boxes lie within `view_gap_um` (5 mm) of each
+  other on both axes, directly or through others; a view is described by its size, never its place,
+  so moving a view on the sheet changes nothing. `views` is `None` when the header states no unit
+  or the drawing holds more than `MAX_ITEMS` (30 000) items (`not_measured` then says
+  `VIEW_ITEMS_OVER_LIMIT`).
+- `sheet_match` reports a top-level closed polyline of four sides along the axes whose box is the
+  drawing space of an A-series sheet (ISO 216 sizes, landscape or portrait, with 10 mm on every
+  side or 20 mm on the left and 10 mm elsewhere, at a scale of ISO 5455's preferred series): its
+  size, every sheet, margin and scale under which it fits, and how many items lie outside it. It is
+  a fact about sizes, not a judgement that the polyline is a frame. When one is found, only the
+  items inside it form views; a frame drawn with line segments is not found and its sides form a
+  view of their own.
+
+### Changed
+
+- `SIGNATURE_VERSION` is 2. Every layer 1 component is unchanged; a signature carries the new
+  fields `views`, `views_truncated`, `view_gap_um` and `sheet_match` besides them.
+
 ## [0.13.0] - 2026-10-30
 
 ### Added
