@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-30
+
 ### Added
 
 - The shape signature separates the views a sheet holds (`signature_version` 2). `views` lists them,
@@ -33,6 +35,8 @@ bumps the minor version.
 
 - `SIGNATURE_VERSION` is 2. Every layer 1 component is unchanged; a signature carries the new
   fields `views`, `views_truncated`, `view_gap_um` and `sheet_match` besides them.
+- `not_measured` names `OUTLINE_UNPLACED` for a line or an arc that sits on a plane no 2D placement carries to
+  the world's plan: it counts in layer 1 but weighs nothing in a view's outline moments.
 
 ## [0.13.0] - 2026-10-30
 
