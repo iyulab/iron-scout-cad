@@ -88,8 +88,12 @@ fn the_lookup_answers_one_line_values_and_withholds_a_cut_value() {
     let s = summarize(&g23());
     assert_eq!(s.labelled("Responsible dept."), Lookup::Unique("ABC 2"));
     assert_eq!(s.labelled("Rev."), Lookup::Unique("A"));
-    // Its first line alone would read as the whole title.
-    assert_eq!(s.labelled("Title"), Lookup::Absent);
+    // Its first line alone would read as the whole title: it is listed, not
+    // given as the answer.
+    assert_eq!(
+        s.labelled("Title"),
+        Lookup::Ambiguous(vec!["Mounting bracket"])
+    );
     let title = s
         .labelled_texts
         .iter()
@@ -147,6 +151,149 @@ fn a_turned_value_is_not_read_as_standing_in_a_column() {
     text_mut(&mut db, "ABC 2").rotation = 0.5;
     let s = summarize(&db);
     assert!(!named_with_a_value_beneath(&s).contains(&"Responsible dept.".to_string()));
+    // Nor is the name paired along its row with a text far to the right,
+    // past the field that stands in the way.
+    for gone in ["Responsible dept.", "ABC 2"] {
+        assert!(
+            !s.labelled_texts.iter().any(|l| l.label.text == gone),
+            "{gone}: {:?}",
+            pairs(&s)
+        );
+    }
+}
+
+/// G23 with a copy of the text `of` placed at (`x`, `y`) reading `text`, at
+/// height `height`.
+fn with_text(
+    mut db: CadDatabase,
+    of: &str,
+    id: u64,
+    at: (f64, f64),
+    height: f64,
+    text: &str,
+) -> CadDatabase {
+    let mut t = text_mut(&mut db, of).clone();
+    t.common.id = EntityId::new(id);
+    t.text = text.to_string();
+    t.start_point.x = at.0;
+    t.start_point.y = at.1;
+    t.text_height = height;
+    db.entities.push(Entity::Text(t));
+    db
+}
+
+#[test]
+fn a_value_continued_by_two_equally_near_lines_is_withheld_not_cut_short() {
+    // A second "for motor M2" drawn exactly over the first: where the title
+    // goes on is not told by position.
+    let db = with_text(
+        g23(),
+        "for motor M2",
+        9_000,
+        (102.0, -68.0),
+        3.5,
+        "for motor M2",
+    );
+    let s = summarize(&db);
+    assert!(
+        !s.labelled_texts.iter().any(|l| l.label.text == "Title"),
+        "{:?}",
+        pairs(&s)
+    );
+    assert_eq!(s.labelled("Title"), Lookup::Absent);
+    // Its texts stay out of the row rule, which would pair them with whatever
+    // lies to their right.
+    assert!(!s
+        .labelled_texts
+        .iter()
+        .any(|l| l.label.text == "Mounting bracket"));
+}
+
+#[test]
+fn a_cut_value_beside_a_whole_one_is_ambiguous_not_unique() {
+    // A second field called "Title" with a one-line value.
+    let mut db = g23();
+    text_mut(&mut db, "Rev.").text = "Title".to_string();
+    let s = summarize(&db);
+    match s.labelled("Title") {
+        Lookup::Ambiguous(values) => {
+            assert_eq!(values, ["A", "Mounting bracket"]);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_long_column_is_a_list_and_stays_with_the_row_rule() {
+    // A header over six lines of one height: no field goes on that long.
+    let mut db = with_text(g23(), "Rev.", 9_000, (190.0, -58.0), 2.0, "Hdr");
+    for (i, y) in [-63.0, -68.0, -73.0, -78.0, -83.0, -88.0]
+        .into_iter()
+        .enumerate()
+    {
+        db = with_text(
+            db,
+            "A",
+            9_001 + i as u64,
+            (190.0, y),
+            3.5,
+            &format!("row {i}"),
+        );
+    }
+    let s = summarize(&db);
+    assert!(!named_with_a_value_beneath(&s).contains(&"Hdr".to_string()));
+}
+
+#[test]
+fn a_line_that_names_a_larger_text_beneath_it_ends_the_value_above() {
+    // "Hdr" over "v1", then "v2" of the same height that is itself the name
+    // of a bigger "big" beneath it.
+    let mut db = with_text(g23(), "Rev.", 9_000, (190.0, -58.0), 2.0, "Hdr");
+    db = with_text(db, "A", 9_001, (190.0, -63.0), 3.5, "v1");
+    db = with_text(db, "A", 9_002, (190.0, -68.0), 3.5, "v2");
+    db = with_text(db, "A", 9_003, (190.0, -73.0), 5.0, "big");
+    let s = summarize(&db);
+    let hdr = s
+        .labelled_texts
+        .iter()
+        .find(|l| l.label.text == "Hdr")
+        .unwrap();
+    assert_eq!(hdr.value.text, "v1");
+    assert!(hdr.continued_by.is_empty(), "{hdr:?}");
+    let v2 = s
+        .labelled_texts
+        .iter()
+        .find(|l| l.label.text == "v2")
+        .unwrap();
+    assert_eq!(v2.value.text, "big");
+}
+
+#[test]
+fn a_text_drawn_over_another_is_not_the_next_line() {
+    let mut db = g23();
+    // A fake bold: the value drawn again a hundredth lower.
+    db = with_text(
+        db,
+        "Mounting bracket",
+        9_000,
+        (102.0, -63.01),
+        3.5,
+        "Mounting bracket",
+    );
+    let s = summarize(&db);
+    // The nearer one is the value; the overprint is not its second line.
+    let title = s
+        .labelled_texts
+        .iter()
+        .find(|l| l.label.text == "Title")
+        .unwrap();
+    assert!(
+        !title
+            .continued_by
+            .iter()
+            .any(|c| c.text == "Mounting bracket"),
+        "{title:?}"
+    );
 }
 
 #[test]

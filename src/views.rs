@@ -75,7 +75,8 @@ pub struct View {
     /// says so.
     #[serde(default)]
     pub wl: Option<PatternCounts>,
-    /// Why `wl` is absent: `"too_large"`.
+    /// Why `wl` is absent: `"too_large"` (more pieces than the limit) or
+    /// `"too_dense"` (more edges than the limit).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wl_note: Option<String>,
 }
@@ -371,7 +372,11 @@ pub(crate) fn separate(items: &[Item]) -> Layer2 {
                 .iter()
                 .flat_map(|&at| items[at].pieces.iter())
                 .collect();
-            let wl = if over { None } else { wl::patterns(&pieces) };
+            let counted = if over {
+                Err("too_large")
+            } else {
+                wl::patterns(&pieces)
+            };
             let box_area = rect.area() as f64;
             let hole_ratio_ppm = if box_area > 0.0 {
                 (covered / box_area * 1e6).round() as u64
@@ -387,8 +392,8 @@ pub(crate) fn separate(items: &[Item]) -> Layer2 {
                     hole_ratio_ppm,
                     outline_moments: moments
                         .second(rect.width() as f64 / 1000.0, rect.height() as f64 / 1000.0),
-                    wl_note: wl.is_none().then(|| "too_large".to_string()),
-                    wl,
+                    wl_note: counted.as_ref().err().map(|why| (*why).to_string()),
+                    wl: counted.ok(),
                 },
             )
         })

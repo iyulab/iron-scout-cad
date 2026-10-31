@@ -50,8 +50,8 @@ pub use summary::{
 };
 pub use views::{SheetFit, SheetMatch, View, MAX_ITEMS, MAX_VIEWS, VIEW_GAP_UM};
 pub use wl::{
-    PatternCounts, WlParams, ANGLE_TOLERANCE_DEG, ENDPOINT_GAP_UM, LABEL_HASH_OVER, MAX_KEYS,
-    MAX_NODES, ROUNDS,
+    PatternCounts, WlParams, ANGLE_TOLERANCE_DEG, ENDPOINT_GAP_UM, LABEL_HASH_OVER, MAX_EDGES,
+    MAX_KEYS, MAX_NODES, MAX_TOTAL_PIECES, ROUNDS,
 };
 
 pub use uncad_model::CadDatabase;

@@ -720,16 +720,23 @@ impl Summary {
     /// label is matched, and the value returned, as plain text.
     ///
     /// A value that goes on over several lines (see
-    /// [`LabelledText::continued_by`]) is not returned: its first line alone
-    /// would pass for the whole value. Read those from
-    /// [`Self::labelled_texts`].
+    /// [`LabelledText::continued_by`]) is never `Unique`: its first line alone
+    /// would pass for the whole value, so it comes back listed in `Ambiguous`.
+    /// Read those from [`Self::labelled_texts`].
     pub fn labelled(&self, label: &str) -> Lookup<&str> {
-        lookup(
+        let carriers = || {
             self.labelled_texts
                 .iter()
-                .filter(|l| l.label.plain == label && l.continued_by.is_empty())
-                .map(|l| l.value.plain.as_str()),
-        )
+                .filter(|l| l.label.plain == label)
+        };
+        match lookup(carriers().map(|l| l.value.plain.as_str())) {
+            // The one value is only the first line of several: listed, but
+            // not given as the answer.
+            Lookup::Unique(first) if carriers().any(|l| !l.continued_by.is_empty()) => {
+                Lookup::Ambiguous(vec![first])
+            }
+            other => other,
+        }
     }
 }
 
@@ -911,15 +918,16 @@ fn labelled_texts(
     }
     unplaced.sort_by_key(|t| t.id);
     let (mut pairs, stacked) = stacked_pairs(&texts, spaces);
-    let rest: Vec<_> = texts
+    for &(label, here) in texts
         .iter()
         .filter(|(t, _)| !stacked.contains(&t.common.id))
-        .collect();
-    for &&(label, here) in &rest {
-        let same_row = |(t, at): &&&(&uncad_model::model::TextEntity, Point2D)| {
+    {
+        let same_row = |(t, at): &&PlacedText<'_>| {
             (at.y - here.y).abs() <= label.text_height.max(t.text_height) / 2.0 && at.x > here.x
         };
-        let candidates: Vec<_> = rest
+        // Every placed text stands in the way, one taken by a pair beneath
+        // included: the nearest text to the right is what it is.
+        let candidates: Vec<_> = texts
             .iter()
             .filter(|c| c.0.common.id != label.common.id && same_row(c))
             .collect();
@@ -933,8 +941,13 @@ fn labelled_texts(
         let mut values: Vec<_> = candidates
             .into_iter()
             .filter(|(_, at)| at.x - here.x == nearest)
-            .map(|&&(t, at)| (t, at))
+            .map(|&(t, at)| (t, at))
             .collect();
+        // What stands nearest to the right belongs to a pair beneath: the
+        // label has no value on its row that position can name.
+        if values.iter().any(|(t, _)| stacked.contains(&t.common.id)) {
+            continue;
+        }
         values.sort_by_key(|(t, _)| t.common.id);
         for (value, there) in values {
             pairs.push(LabelledText {
@@ -963,6 +976,16 @@ const STACK_LABEL_SHARE: f64 = 0.8;
 const STACK_REACH: f64 = 1.8;
 /// How far off its label's left edge the value may start, in value heights.
 const STACK_COLUMN: f64 = 0.15;
+/// How close beneath the line above a continuing line may start, at least,
+/// in value heights: anything nearer is a text drawn over another (a faked
+/// bold), not the next line.
+const STACK_MIN_PITCH: f64 = 0.5;
+/// The most lines a value may continue over. A column that goes on longer is
+/// a list, not a field, and is left to the row rule.
+const STACK_MAX_CONTINUED: usize = 3;
+/// Two distances are the same distance when they differ by at most this share
+/// of the larger one.
+const STACK_TIE: f64 = 1e-9;
 
 /// A text the stacked rule can place: left-justified on its baseline, not
 /// turned, on the world's own plane. Anything else is where its alignment
@@ -977,6 +1000,48 @@ fn stackable(t: &uncad_model::model::TextEntity) -> bool {
         && Ocs::of(t.extrusion).is_some_and(|o| o.is_flat() && o.z_axis().z > 0.0)
 }
 
+/// Texts ordered by where they start along x, so the texts of one column are
+/// found without looking at the rest.
+struct ByX<'a> {
+    sorted: Vec<&'a PlacedText<'a>>,
+}
+
+impl<'a> ByX<'a> {
+    fn new(mut texts: Vec<&'a PlacedText<'a>>) -> Self {
+        texts.sort_by(|a, b| {
+            a.1.x
+                .total_cmp(&b.1.x)
+                .then(a.0.common.id.cmp(&b.0.common.id))
+        });
+        ByX { sorted: texts }
+    }
+
+    /// The texts starting within `reach` of `x` along x.
+    fn near(&self, x: f64, reach: f64) -> impl Iterator<Item = &'a PlacedText<'a>> + '_ {
+        let from = self.sorted.partition_point(|t| t.1.x < x - reach);
+        self.sorted[from..]
+            .iter()
+            .take_while(move |t| t.1.x <= x + reach)
+            .copied()
+    }
+}
+
+/// Whether `a` and `b` are the same distance.
+fn tied(a: f64, b: f64) -> bool {
+    (a - b).abs() <= STACK_TIE * a.abs().max(b.abs())
+}
+
+/// How a value's later lines came out.
+enum Continued<'a> {
+    /// The lines that continue it (none for a one-line value).
+    Lines(Vec<PlacedText<'a>>),
+    /// Two lines were equally near the next one: where the value goes on is
+    /// not told by position.
+    Unclear(Vec<PlacedText<'a>>),
+    /// More lines than a field holds.
+    TooLong,
+}
+
 /// The label-above-value pairs among the loose texts, and the IDs of every
 /// text that took part (label, value, or a later line of a value).
 ///
@@ -985,26 +1050,31 @@ fn stackable(t: &uncad_model::model::TextEntity) -> bool {
 /// L is smaller than V ([`STACK_LABEL_SHARE`]), and no other loose text sits
 /// in that column between them. V is the nearest such text; texts equally
 /// near are all listed. Lines of the same height directly beneath V, each
-/// with no text between it and the line above, continue the value; an
-/// ambiguous next line (two equally near) ends the value there.
+/// with no text between it and the line above, continue the value
+/// ([`continuation`]). A value whose later lines cannot be told is not
+/// listed -- its first line alone would pass for all of it -- but its texts
+/// still keep out of the row rule.
 fn stacked_pairs(
     texts: &[PlacedText<'_>],
     spaces: &BTreeMap<EntityId, &str>,
 ) -> (Vec<LabelledText>, BTreeSet<EntityId>) {
     let eligible: Vec<&PlacedText<'_>> = texts.iter().filter(|(t, _)| stackable(t)).collect();
+    let tallest = eligible
+        .iter()
+        .map(|(t, _)| t.text_height)
+        .fold(0.0, f64::max);
+    let columns = ByX::new(eligible.clone());
+    let everything = ByX::new(texts.iter().collect());
     let blocked = |top: Point2D, bottom: Point2D, height: f64, skip: &[EntityId]| {
-        texts.iter().any(|(t, at)| {
-            !skip.contains(&t.common.id)
-                && (at.x - top.x).abs() <= STACK_COLUMN * height
-                && at.y < top.y
-                && at.y > bottom.y
-        })
+        everything
+            .near(top.x, STACK_COLUMN * height)
+            .any(|(t, at)| !skip.contains(&t.common.id) && at.y < top.y && at.y > bottom.y)
     };
     let mut pairs = Vec::new();
     let mut taken = BTreeSet::new();
     for &&(label, here) in &eligible {
-        let candidates: Vec<_> = eligible
-            .iter()
+        let candidates: Vec<_> = columns
+            .near(here.x, STACK_COLUMN * tallest)
             .filter(|(v, at)| {
                 let drop = here.y - at.y;
                 v.common.id != label.common.id
@@ -1023,16 +1093,24 @@ fn stacked_pairs(
         };
         let mut values: Vec<_> = candidates
             .into_iter()
-            .filter(|(_, at)| here.y - at.y == nearest)
-            .map(|&&(t, at)| (t, at))
+            .filter(|(_, at)| tied(here.y - at.y, nearest))
+            .map(|&(t, at)| (t, at))
             .filter(|(v, at)| !blocked(here, *at, v.text_height, &[label.common.id, v.common.id]))
             .collect();
         values.sort_by_key(|(t, _)| t.common.id);
         for (value, there) in values {
-            let continued = continuation(&eligible, value, there, &blocked);
+            let (continued, listed) = match continuation(&columns, &blocked, value, there) {
+                Continued::Lines(lines) => (lines, true),
+                Continued::Unclear(lines) => (lines, false),
+                // A list, not a field: left to the row rule as it was.
+                Continued::TooLong => continue,
+            };
             taken.insert(label.common.id);
             taken.insert(value.common.id);
             taken.extend(continued.iter().map(|(t, _)| t.common.id));
+            if !listed {
+                continue;
+            }
             pairs.push(LabelledText {
                 label: TextRef::of(label.common.id, &label.text, Some(here), spaces),
                 value: TextRef::of(value.common.id, &value.text, Some(there), spaces),
@@ -1048,27 +1126,42 @@ fn stacked_pairs(
     (pairs, taken)
 }
 
-/// The lines that continue a value beneath its first line, top to bottom.
+/// The lines that continue a value beneath its first line, top to bottom: of
+/// the value's height, in its column, at least [`STACK_MIN_PITCH`] and at most
+/// [`STACK_REACH`] heights beneath the line above, with no text between. A
+/// line that is itself the label of a larger text beneath it starts the next
+/// field and ends the value.
 fn continuation<'a>(
-    eligible: &[&PlacedText<'a>],
+    columns: &ByX<'a>,
+    blocked: &impl Fn(Point2D, Point2D, f64, &[EntityId]) -> bool,
     value: &'a uncad_model::model::TextEntity,
     first: Point2D,
-    blocked: &impl Fn(Point2D, Point2D, f64, &[EntityId]) -> bool,
-) -> Vec<PlacedText<'a>> {
+) -> Continued<'a> {
     let height = value.text_height;
+    let is_label = |c: &uncad_model::model::TextEntity, at: Point2D| {
+        columns
+            .near(at.x, STACK_COLUMN * height * 2.0)
+            .any(|(d, there)| {
+                let drop = at.y - there.y;
+                d.common.id != c.common.id
+                    && drop > 0.0
+                    && drop <= STACK_REACH * d.text_height
+                    && (there.x - at.x).abs() <= STACK_COLUMN * d.text_height
+                    && c.text_height <= STACK_LABEL_SHARE * d.text_height
+            })
+    };
     let mut lines: Vec<PlacedText<'a>> = Vec::new();
     let mut above = first;
     loop {
-        let candidates: Vec<_> = eligible
-            .iter()
+        let candidates: Vec<_> = columns
+            .near(first.x, STACK_COLUMN * height)
             .filter(|(t, at)| {
                 let drop = above.y - at.y;
                 t.common.id != value.common.id
                     && !lines.iter().any(|(l, _)| l.common.id == t.common.id)
                     && (t.text_height - height).abs() <= height * 1e-6
-                    && drop > 0.0
+                    && drop >= STACK_MIN_PITCH * height
                     && drop <= STACK_REACH * height
-                    && (at.x - first.x).abs() <= STACK_COLUMN * height
             })
             .collect();
         let Some(nearest) = candidates
@@ -1078,20 +1171,23 @@ fn continuation<'a>(
         else {
             break;
         };
-        let mut next: Vec<_> = candidates
+        let next: Vec<_> = candidates
             .into_iter()
-            .filter(|(_, at)| above.y - at.y == nearest)
+            .filter(|(_, at)| tied(above.y - at.y, nearest))
             .collect();
         if next.len() != 1 {
-            break;
+            return Continued::Unclear(lines);
         }
-        let &&(t, at) = next.remove(0);
+        let &(t, at) = next[0];
         let previous = lines.last().map_or(value.common.id, |(l, _)| l.common.id);
-        if blocked(above, at, height, &[previous, t.common.id]) {
+        if blocked(above, at, height, &[previous, t.common.id]) || is_label(t, at) {
             break;
         }
         lines.push((t, at));
+        if lines.len() > STACK_MAX_CONTINUED {
+            return Continued::TooLong;
+        }
         above = at;
     }
-    lines
+    Continued::Lines(lines)
 }

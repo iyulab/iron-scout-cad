@@ -41,6 +41,10 @@
 //!   FNV-1a 64-bit hash of its bytes.
 //! - Each round keeps its [`MAX_KEYS`] most frequent labels (ties by label
 //!   text) and says when it cut.
+//! - A view of more than [`MAX_NODES`] pieces, or with more than [`MAX_EDGES`]
+//!   edges, has no counts and says why; so does every view of a drawing that
+//!   holds more than [`MAX_TOTAL_PIECES`] pieces. An end whose coordinates are
+//!   not finite, or past a trillion millimetres, joins nothing.
 //!
 //! A line drawn as one piece and the same line drawn as two are different
 //! patterns: the signature does not merge pieces.
@@ -64,8 +68,23 @@ pub const ROUNDS: u32 = 2;
 /// with more says so (`wl_note`) and has no counts.
 pub const MAX_NODES: usize = 200_000;
 
+/// The most edges a view may have for its patterns to be counted: a heap of
+/// pieces ending at one point joins every pair of them. A view with more says
+/// so (`wl_note`) and has no counts.
+pub const MAX_EDGES: usize = 8 * MAX_NODES;
+
+/// The most pieces a whole drawing may hold for any view's patterns to be
+/// counted. Holding them is what costs memory, so past this the drawing's
+/// views all say `too_large` and no more pieces are kept.
+pub const MAX_TOTAL_PIECES: usize = 2_000_000;
+
 /// The most labels a round keeps.
 pub const MAX_KEYS: usize = 512;
+
+/// Coordinates, in millimetres, past which an end is not placed: a number
+/// that large is a sentinel or an error, and a cell index made from it would
+/// not fit.
+const MAX_COORD_MM: f64 = 1e12;
 
 /// A label longer than this many characters is replaced by its hash.
 pub const LABEL_HASH_OVER: usize = 120;
@@ -82,6 +101,10 @@ pub struct WlParams {
     pub rounds: u32,
     /// See [`MAX_NODES`].
     pub max_nodes: u64,
+    /// See [`MAX_EDGES`].
+    pub max_edges: u64,
+    /// See [`MAX_TOTAL_PIECES`].
+    pub max_total_pieces: u64,
     /// See [`MAX_KEYS`].
     pub max_keys: u64,
     /// See [`LABEL_HASH_OVER`].
@@ -97,6 +120,8 @@ impl WlParams {
             angle_tolerance_deg: ANGLE_TOLERANCE_DEG,
             rounds: ROUNDS,
             max_nodes: MAX_NODES as u64,
+            max_edges: MAX_EDGES as u64,
+            max_total_pieces: MAX_TOTAL_PIECES as u64,
             max_keys: MAX_KEYS as u64,
             label_hash_over: LABEL_HASH_OVER as u64,
             label_hash: "fnv1a-64".to_string(),
@@ -162,11 +187,20 @@ impl Piece {
                 (um.is_finite() && um > 0.0 && steps.is_finite())
                     .then(|| format!("ARC:r{}:a{}", bin(um as u64), steps as u64))
             }
-            Piece::Circle { diameter_um } => Some(format!("CIRCLE:b{}", bin(*diameter_um))),
+            Piece::Circle { diameter_um } => {
+                (*diameter_um > 0).then(|| format!("CIRCLE:b{}", bin(*diameter_um)))
+            }
         }
     }
 
+    /// The ends of the piece that can be placed on the grid.
     fn ends(&self) -> Vec<End> {
+        let mut ends = self.ends_unchecked();
+        ends.retain(|e| e.at.iter().all(|c| c.is_finite() && c.abs() < MAX_COORD_MM));
+        ends
+    }
+
+    fn ends_unchecked(&self) -> Vec<End> {
         match self {
             Piece::Line { from, to } => {
                 let along = [to[0] - from[0], to[1] - from[1]];
@@ -271,11 +305,12 @@ fn most_frequent(counts: BTreeMap<&str, u64>, max: usize) -> (BTreeMap<String, u
     )
 }
 
-/// The patterns `pieces` make, or `None` when there are more than
-/// [`MAX_NODES`] of them.
-pub(crate) fn patterns(pieces: &[&Piece]) -> Option<PatternCounts> {
+/// The patterns `pieces` make, or why they are not counted: `"too_large"`
+/// (more than [`MAX_NODES`] pieces) or `"too_dense"` (more than [`MAX_EDGES`]
+/// edges).
+pub(crate) fn patterns(pieces: &[&Piece]) -> Result<PatternCounts, &'static str> {
     if pieces.len() > MAX_NODES {
-        return None;
+        return Err("too_large");
     }
     // Nodes: the pieces that have a size.
     let mut labels: Vec<String> = Vec::new();
@@ -296,6 +331,7 @@ pub(crate) fn patterns(pieces: &[&Piece]) -> Option<PatternCounts> {
         grid.entry(cell(end.at)).or_default().push(i);
     }
     let mut neighbours: Vec<Vec<(&'static str, usize)>> = vec![Vec::new(); labels.len()];
+    let mut edges = 0usize;
     for (i, (a_node, a)) in ends.iter().enumerate() {
         let (cx, cy) = cell(a.at);
         for dx in -1..=1 {
@@ -313,6 +349,10 @@ pub(crate) fn patterns(pieces: &[&Piece]) -> Option<PatternCounts> {
                         continue;
                     }
                     if (a.at[0] - b.at[0]).hypot(a.at[1] - b.at[1]) <= gap {
+                        edges += 1;
+                        if edges > MAX_EDGES {
+                            return Err("too_dense");
+                        }
                         let label = edge_label(a.inward, b.inward);
                         neighbours[*a_node].push((label, *b_node));
                         neighbours[*b_node].push((label, *a_node));
@@ -348,12 +388,50 @@ pub(crate) fn patterns(pieces: &[&Piece]) -> Option<PatternCounts> {
             .collect();
         current = next;
     }
-    Some(PatternCounts { rounds, truncated })
+    Ok(PatternCounts { rounds, truncated })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn line(from: [f64; 2], to: [f64; 2]) -> Piece {
+        Piece::Line { from, to }
+    }
+
+    #[test]
+    fn an_end_that_cannot_be_placed_joins_nothing_and_costs_nothing() {
+        let pieces = [
+            line([0.0, 0.0], [10.0, 0.0]),
+            Piece::Arc {
+                centre: [f64::NAN, 0.0],
+                u: [5.0, 0.0],
+                v: [0.0, 5.0],
+                start: 0.0,
+                sweep: 1.0,
+            },
+            line([1e30, 0.0], [1e30, 10.0]),
+            line([f64::INFINITY, 0.0], [0.0, 3.0]),
+        ];
+        let refs: Vec<&Piece> = pieces.iter().collect();
+        let counts = patterns(&refs).expect("counted");
+        // Three are nodes (the line of infinite length has no size to
+        // label); none is joined to another.
+        assert_eq!(counts.rounds["r0"].values().sum::<u64>(), 3);
+        assert!(counts.rounds["r1"].keys().all(|k| k.ends_with("[]")));
+    }
+
+    #[test]
+    fn a_heap_of_pieces_ending_at_one_point_is_too_dense_not_a_memory_bomb() {
+        // Every pair of the pieces meets at the origin: n(n-1)/2 edges.
+        let n: u32 = 3_500;
+        let pieces: Vec<Piece> = (0..n)
+            .map(|i| line([0.0, 0.0], [10.0 + f64::from(i), 7.0]))
+            .collect();
+        let refs: Vec<&Piece> = pieces.iter().collect();
+        assert!((n as usize) * (n as usize - 1) / 2 > MAX_EDGES);
+        assert_eq!(patterns(&refs).err(), Some("too_dense"));
+    }
 
     #[test]
     fn a_round_with_too_many_labels_keeps_the_most_frequent_and_says_it_cut() {

@@ -55,7 +55,7 @@ use crate::limits::{NotEntered, Walk};
 use crate::moments::Moments;
 use crate::summary::DimensionSummary;
 use crate::views::{self, Item, Rect, SheetMatch, View, VIEW_GAP_UM};
-use crate::wl::{Piece, WlParams, MAX_NODES};
+use crate::wl::{Piece, WlParams, MAX_NODES, MAX_TOTAL_PIECES};
 use std::collections::BTreeSet;
 use uncad_model::Affine2;
 
@@ -157,6 +157,8 @@ pub fn signature(db: &CadDatabase) -> Signature {
         not_measured: BTreeMap::new(),
         blocks: Walk::default(),
         item: ItemCount::default(),
+        pieces_total: 0,
+        pieces_all_over: false,
     };
     let model = db
         .tables
@@ -208,6 +210,12 @@ pub fn signature(db: &CadDatabase) -> Signature {
                 pieces_over: item.pieces_over,
                 frame_candidate: is_axis_rectangle(e),
             });
+        }
+    }
+    if counter.pieces_all_over {
+        for item in &mut items {
+            item.pieces = Vec::new();
+            item.pieces_over = true;
         }
     }
     if too_many {
@@ -357,6 +365,10 @@ struct Counter<'a> {
     blocks: Walk,
     /// What the top-level entity being walked counted, for layer 2.
     item: ItemCount,
+    /// How many pieces the drawing has been walked through, and whether that
+    /// passed [`MAX_TOTAL_PIECES`] (no more are kept, and no view is counted).
+    pieces_total: usize,
+    pieces_all_over: bool,
 }
 
 /// What one top-level entity counted: the part of `entities` and the circle
@@ -439,6 +451,16 @@ impl Counter<'_> {
     /// Adds a piece to the top-level entity being walked, as a node of layer
     /// 3.
     fn piece(&mut self, piece: Piece) {
+        if self.pieces_all_over {
+            return;
+        }
+        self.pieces_total += 1;
+        if self.pieces_total > MAX_TOTAL_PIECES {
+            self.pieces_all_over = true;
+            self.item.pieces = Vec::new();
+            self.item.pieces_over = true;
+            return;
+        }
         if self.item.pieces.len() >= MAX_NODES {
             self.item.pieces_over = true;
         } else {
@@ -470,7 +492,11 @@ impl Counter<'_> {
                 match at.uniform {
                     Some(u) => {
                         if let Some(um) = self.micrometres(2.0 * c.radius * u) {
-                            self.piece(Piece::Circle { diameter_um: um });
+                            // A circle on a plane that cannot be mapped to the
+                            // world's plan is not a circle there: no piece.
+                            if at.place.and_then(|t| in_plane(c.extrusion, &t)).is_some() {
+                                self.piece(Piece::Circle { diameter_um: um });
+                            }
                             *self.diameters.entry(um).or_insert(0) += 1;
                             *self.item.diameters.entry(um).or_insert(0) += 1;
                         }

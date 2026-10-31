@@ -305,6 +305,39 @@ fn a_drawing_with_no_unit_has_no_views_and_so_no_counts() {
 }
 
 #[test]
+fn a_circle_on_a_plane_that_cannot_be_mapped_to_the_plan_is_not_a_node() {
+    let mut db = g24();
+    for e in model_space(&mut db) {
+        if let Entity::Circle(c) = e {
+            c.extrusion = Point3D {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            };
+        }
+    }
+    let p = patterns(&db);
+    assert!(
+        !round(&p, "r0").keys().any(|k| k.starts_with("CIRCLE")),
+        "{:?}",
+        round(&p, "r0")
+    );
+}
+
+#[test]
+fn a_circle_with_no_size_is_not_a_node() {
+    let mut db = g24();
+    for e in model_space(&mut db) {
+        if let Entity::Circle(c) = e {
+            c.radius = 0.0;
+            c.center.x = 2.0; // still within 5 mm of the outline
+        }
+    }
+    let p = patterns(&db);
+    assert!(!round(&p, "r0").keys().any(|k| k.starts_with("CIRCLE")));
+}
+
+#[test]
 fn the_same_drawing_twice_gives_the_same_bytes() {
     let one = serde_json::to_string(&signature(&g24())).unwrap();
     let two = serde_json::to_string(&signature(&g24())).unwrap();

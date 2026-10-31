@@ -15,7 +15,9 @@ bumps the minor version.
   Weisfeiler--Lehman refinement `wl.rounds` counts how many pieces carry each readable label -- a piece's
   kind and size bin, then with how it meets its neighbours (`smooth` within 1 degree of a straight
   continuation, `orthogonal`, `other`). `wl` is `None` with `wl_note` `"too_large"` for a view of more than
-  `MAX_NODES` pieces; a round keeps its `MAX_KEYS` most frequent labels and says when it cut. The
+  `MAX_NODES` pieces and `"too_dense"` for one with more than `MAX_EDGES` edges (every view of a drawing
+  with more than `MAX_TOTAL_PIECES` pieces is `"too_large"`); an end with a non-finite or absurdly large
+  coordinate joins nothing; a round keeps its `MAX_KEYS` most frequent labels and says when it cut. The
   parameters are stated in `Signature::wl_params`. The counts do not change when a view is turned, moved or
   mirrored, or when the entities are reordered; scaling it changes them. A line drawn as two pieces is
   counted as two (pieces are not merged), and ellipses and splines are not nodes.
@@ -27,7 +29,9 @@ bumps the minor version.
   world's plane; the value starts at most 1.8 of its heights beneath it and at most 0.15 of its heights
   off its left edge; the name is at most 0.8 of the value's height (texts of one height are never paired
   this way); no other text sits in that column between them. Equally near candidates are all listed.
-  A text in such a pair, or a later line of its value, is left out of the row rule.
+  A text in such a pair, or a later line of its value, is left out of the row rule. A value whose later lines
+  cannot be told (two equally near) is not listed, and a column that goes on over more than three lines is
+  a list and left to the row rule.
 - `DimensionSummary::text_gap` (DIMGAP in force for the dimension -- its style's, or its own override;
   negative when the text is drawn in a box) and `DimensionSummary::role`, the `DimensionRole` the file
   states: `Basic` for boxed text (a basic dimension is written that way) and `Reference` for a text
@@ -47,8 +51,11 @@ bumps the minor version.
   the name beside it, and a value with the value beside it, and the value under a name was not found. The
   pairs for such a drawing now are the ones beneath. Row pairs of drawings that do not use the layout are
   unchanged.
-- `Summary::labelled` does not return a value that continues over further lines (`continued_by` is not
-  empty): its first line alone would read as the whole value. Read those pairs from `labelled_texts`.
+- `Summary::labelled` never answers `Unique` for a value that continues over further lines (`continued_by`
+  is not empty): its first line alone would read as the whole value, so it comes back listed in `Ambiguous`.
+  Read those pairs from `labelled_texts`.
+- The row rule no longer skips over a text that belongs to a pair beneath: when the nearest text to the right
+  of a name is part of such a pair, the name has no value on its row.
 - `DrawingUnits` no longer implements `Eq` (it now holds an `f64`).
 
 ## [0.14.0] - 2026-10-30
