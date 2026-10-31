@@ -220,7 +220,40 @@ pub struct DimensionSummary {
     /// `DimStyleRecord` for what the format means by an unwritten value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_factor: Option<f64>,
+    /// DIMGAP in force for this dimension -- its style's (DXF 147), or its
+    /// own override of it: the gap between the text and the dimension line,
+    /// **negative when the text is drawn in a box**. `None` under the same
+    /// conditions as [`Self::length_factor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_gap: Option<f64>,
+    /// How the file writes this dimension, by the two marks drafting
+    /// standards put on the dimension itself; see [`DimensionRole`]. `None`
+    /// when it states neither -- the ordinary dimension -- and also when it
+    /// states both, or when a mark cannot be ruled out because the gap is
+    /// not known: nothing is guessed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<DimensionRole>,
     pub confidence: Confidence,
+}
+
+/// How a dimension is written, read from what its file states and from
+/// nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum DimensionRole {
+    /// The text is drawn in a box: the dimension's [`DimensionSummary::text_gap`]
+    /// is negative. A basic dimension -- a theoretically exact value -- is
+    /// written that way (ASME Y14.5; AutoCAD's negative `DIMGAP`). Only the
+    /// box is read: a style whose every dimension is boxed says that of
+    /// every dimension.
+    Basic,
+    /// The text is the measurement in parentheses -- the whole text sits
+    /// inside one pair, as in `(<>)` or `(125)` -- and the text is not
+    /// boxed. A reference dimension -- given for information -- is written
+    /// that way. Only a literal text is read: a measurement the drawing
+    /// computes carries no parentheses.
+    Reference,
 }
 
 /// The tolerance variables of a dimension style, each as the style states
@@ -392,12 +425,25 @@ impl DimensionSummary {
                     .collect()
             })
             .unwrap_or_default();
+        let plain_text = literal.map(|text| plain(text, TextKind::MText));
+        // The style as this dimension sees it: its own, with the dimension's
+        // overrides laid over it. Not known when the style is not in the
+        // table or the overrides were not read.
+        let effective = d
+            .style_name
+            .resolved()
+            .and_then(|name| tables.dim_styles.get(name))
+            .zip(d.style_overrides.as_ref())
+            .map(|(style, overrides)| style.overridden(overrides));
+        let text_gap = effective.as_ref().and_then(|style| style.text_gap);
         DimensionSummary {
             id: d.common.id,
             block: d.block_name.clone(),
             kind: d.kind,
             measurement: d.measurement,
-            plain: literal.map(|text| plain(text, TextKind::MText)),
+            role: dimension_role(text_gap, plain_text.as_deref()),
+            text_gap,
+            plain: plain_text,
             text: d.text_override.clone(),
             text_midpoint: d.text_midpoint,
             style: d.style_name.clone(),
@@ -419,13 +465,63 @@ impl DimensionSummary {
                     .collect()
             }),
             text_stacks,
-            length_factor: d
-                .style_name
-                .resolved()
-                .and_then(|name| tables.dim_styles.get(name))
-                .zip(d.style_overrides.as_ref())
-                .and_then(|(style, overrides)| style.overridden(overrides).length_factor),
+            length_factor: effective.as_ref().and_then(|style| style.length_factor),
             confidence: d.common.confidence,
+        }
+    }
+}
+
+/// A dimension's role from its effective text gap and its literal text in
+/// plain form: boxed text (a negative gap) is a basic dimension unless the
+/// text is also parenthesized -- the file then states both marks and no role
+/// is read; a parenthesized text is a reference dimension only when the gap
+/// is known not to box it.
+fn dimension_role(gap: Option<f64>, plain_text: Option<&str>) -> Option<DimensionRole> {
+    let boxed = gap.is_some_and(|g| g < 0.0);
+    let unboxed = gap.is_some_and(|g| g >= 0.0);
+    let parenthesized = plain_text.is_some_and(enclosed_in_parentheses);
+    match (boxed, parenthesized) {
+        (true, false) => Some(DimensionRole::Basic),
+        (false, true) if unboxed => Some(DimensionRole::Reference),
+        _ => None,
+    }
+}
+
+/// Whether one pair of parentheses holds the whole text: `(125)` and
+/// `((a) b)` do, `(2X) 10` and `(a)(b)` do not.
+fn enclosed_in_parentheses(text: &str) -> bool {
+    let chars: Vec<char> = text.trim().chars().collect();
+    if chars.first() != Some(&'(') || chars.last() != Some(&')') {
+        return false;
+    }
+    let mut depth = 0i32;
+    for (i, c) in chars.iter().enumerate() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                // The first pair closes before the end, or a `)` has no `(`.
+                if depth < 0 || (depth == 0 && i + 1 != chars.len()) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+
+    #[test]
+    fn one_pair_of_parentheses_must_hold_the_whole_text() {
+        for yes in ["(<>)", "(125)", " (5) ", "((a) b)"] {
+            assert!(enclosed_in_parentheses(yes), "{yes}");
+        }
+        for no in ["", "(", ")(", "(2X) 10", "(a)(b)", "125", "(125", "<>"] {
+            assert!(!enclosed_in_parentheses(no), "{no}");
         }
     }
 }

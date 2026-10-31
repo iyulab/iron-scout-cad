@@ -42,7 +42,7 @@ pub use relate::{
 pub use select::{select, Selected, SelectedEntity, Selection, SpaceFilter};
 pub use signature::{signature, Signature, ToleranceCounts, SIGNATURE_VERSION};
 pub use summary::{
-    plain_text, summarize, summarize_with, AttributeValue, BlockSummary, CellText,
+    plain_text, summarize, summarize_with, AttributeValue, BlockSummary, CellText, DimensionRole,
     DimensionSummary, DrawingIds, DrawingUnits, LabelledText, LayerSummary, Lookup, StyleTolerance,
     Summary, TableCells, TableSummary, TextRef, TextStack, ToleranceFrame, UnresolvedInsert,
 };

@@ -480,6 +480,59 @@ fn a_dimension_carries_the_length_factor_in_force_for_it() {
     assert_eq!(d(304).length_factor, None);
 }
 
+/// A dimension is a basic one when its text is boxed (a negative DIMGAP --
+/// the style's, or its own override of it) and a reference one when the whole
+/// text is in parentheses and not boxed. When the file states both marks, or
+/// the gap is not known, no role is read.
+#[test]
+fn a_dimension_is_basic_or_reference_only_by_what_its_file_states() {
+    use iron_scout_cad::DimensionRole;
+    use uncad_model::model::{OverrideValue, StyleOverride};
+    let mut v: serde_json::Value =
+        serde_json::from_str(include_str!("golden/g5.expected.json")).unwrap();
+    v["tables"]["dim_styles"]["ISO-25"]["text_gap"] = (-0.625).into();
+    let dims = v["entities"].as_array_mut().unwrap();
+    let at = |dims: &Vec<serde_json::Value>, id: u64| {
+        dims.iter().position(|e| e["common"]["id"] == id).unwrap()
+    };
+    let unbox = serde_json::to_value(vec![StyleOverride {
+        variable: 147,
+        value: OverrideValue::Real(0.09),
+    }])
+    .unwrap();
+    let literal = |text: &str| serde_json::json!({"type": "LITERAL", "data": text});
+    // 298: the dimension unboxes its own text and writes it in parentheses.
+    let i = at(dims, 298);
+    dims[i]["style_overrides"] = unbox.clone();
+    dims[i]["text_override"] = literal("(<>)");
+    // 299: the style's box, a measurement the drawing computes.
+    // 301: the style's box and a parenthesized text -- both marks.
+    let i = at(dims, 301);
+    dims[i]["text_override"] = literal("(125)");
+    // 304: unboxed and nothing written in parentheses.
+    let i = at(dims, 304);
+    dims[i]["style_overrides"] = unbox;
+    // 302: a style the table does not have -- the gap is not known, so a
+    // parenthesized text cannot be told from one that is also boxed.
+    let i = at(dims, 302);
+    dims[i]["text_override"] = literal("(5)");
+    let db: CadDatabase = serde_json::from_value(v).unwrap();
+
+    let s = summarize(&db);
+    let d = |id: u64| s.dimensions.iter().find(|d| d.id.value() == id).unwrap();
+    assert_eq!(
+        (d(298).text_gap, d(298).role),
+        (Some(0.09), Some(DimensionRole::Reference))
+    );
+    assert_eq!(
+        (d(299).text_gap, d(299).role),
+        (Some(-0.625), Some(DimensionRole::Basic))
+    );
+    assert_eq!((d(301).text_gap, d(301).role), (Some(-0.625), None));
+    assert_eq!((d(304).text_gap, d(304).role), (Some(0.09), None));
+    assert_eq!((d(302).text_gap, d(302).role), (None, None));
+}
+
 /// A feature control frame is listed with its text as written -- two rows,
 /// the symbol-font switch, `%%v` between cells -- and that text with its
 /// MTEXT codes read; what the symbol and the cells mean is not read.
