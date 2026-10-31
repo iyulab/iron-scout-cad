@@ -9,6 +9,15 @@ bumps the minor version.
 
 ### Added
 
+- `labelled_texts` reads the layout ISO 7200 draws its fields in: a field's name a small text at the top
+  left of the field and its value a larger text beneath it in the same column. Such a pair has
+  `LabelledText::direction` `Below` (`LabelDirection`; the row pairs it always had are `Right`, the default
+  for a pair written before the field existed). A value that goes on over several lines lists the later
+  lines in `LabelledText::continued_by`. The rule: the name is a left-justified, unturned text on the
+  world's plane; the value starts at most 1.8 of its heights beneath it and at most 0.15 of its heights
+  off its left edge; the name is at most 0.8 of the value's height (texts of one height are never paired
+  this way); no other text sits in that column between them. Equally near candidates are all listed.
+  A text in such a pair, or a later line of its value, is left out of the row rule.
 - `DimensionSummary::text_gap` (DIMGAP in force for the dimension -- its style's, or its own override;
   negative when the text is drawn in a box) and `DimensionSummary::role`, the `DimensionRole` the file
   states: `Basic` for boxed text (a basic dimension is written that way) and `Reference` for a text
@@ -23,6 +32,12 @@ bumps the minor version.
 
 ### Changed
 
+- A title block drawn with names above values no longer yields false row pairs: a name used to be paired with
+  the name beside it, and a value with the value beside it, and the value under a name was not found. The
+  pairs for such a drawing now are the ones beneath. Row pairs of drawings that do not use the layout are
+  unchanged.
+- `Summary::labelled` does not return a value that continues over further lines (`continued_by` is not
+  empty): its first line alone would read as the whole value. Read those pairs from `labelled_texts`.
 - `DrawingUnits` no longer implements `Eq` (it now holds an `f64`).
 
 ## [0.14.0] - 2026-10-30

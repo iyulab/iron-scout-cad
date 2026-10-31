@@ -43,8 +43,9 @@ pub use select::{select, Selected, SelectedEntity, Selection, SpaceFilter};
 pub use signature::{signature, Signature, ToleranceCounts, SIGNATURE_VERSION};
 pub use summary::{
     plain_text, summarize, summarize_with, AttributeValue, BlockSummary, CellText, DimensionRole,
-    DimensionSummary, DrawingIds, DrawingUnits, LabelledText, LayerSummary, Lookup, StyleTolerance,
-    Summary, TableCells, TableSummary, TextRef, TextStack, ToleranceFrame, UnresolvedInsert,
+    DimensionSummary, DrawingIds, DrawingUnits, LabelDirection, LabelledText, LayerSummary, Lookup,
+    StyleTolerance, Summary, TableCells, TableSummary, TextRef, TextStack, ToleranceFrame,
+    UnresolvedInsert,
 };
 pub use views::{SheetFit, SheetMatch, View, MAX_ITEMS, MAX_VIEWS, VIEW_GAP_UM};
 
