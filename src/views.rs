@@ -28,6 +28,7 @@
 //! sheet or copying the part to another sheet changes nothing here.
 
 use crate::moments::Moments;
+use crate::wl::{self, PatternCounts, Piece};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -68,6 +69,15 @@ pub struct View {
     /// holds no line or arc, or its box has no width or no height; circles,
     /// ellipses and splines do not weigh.
     pub outline_moments: Option<[i64; 3]>,
+    /// How the view's lines, arcs and circles are joined, counted as local
+    /// patterns (layer 3; see the module doc of `wl`). `None` when the view
+    /// holds more than [`MAX_NODES`](crate::MAX_NODES) pieces: `wl_note`
+    /// says so.
+    #[serde(default)]
+    pub wl: Option<PatternCounts>,
+    /// Why `wl` is absent: `"too_large"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wl_note: Option<String>,
 }
 
 /// A closed polyline that is the drawing space of an A-series sheet, and
@@ -160,6 +170,10 @@ pub(crate) struct Item {
     /// The point, in millimetres, `moments` are taken about.
     pub origin: [f64; 2],
     pub moments: Moments,
+    /// What it draws, as the nodes of layer 3, and whether more was drawn than
+    /// a node list takes.
+    pub pieces: Vec<Piece>,
+    pub pieces_over: bool,
     /// Whether this item is a closed four-sided polyline along the axes: a
     /// candidate for a sheet frame.
     pub frame_candidate: bool,
@@ -352,6 +366,12 @@ pub(crate) fn separate(items: &[Item]) -> Layer2 {
                 .iter()
                 .map(|(d, n)| std::f64::consts::FRAC_PI_4 * (*d as f64) * (*d as f64) * (*n as f64))
                 .sum();
+            let over = group.iter().any(|&at| items[at].pieces_over);
+            let pieces: Vec<&Piece> = group
+                .iter()
+                .flat_map(|&at| items[at].pieces.iter())
+                .collect();
+            let wl = if over { None } else { wl::patterns(&pieces) };
             let box_area = rect.area() as f64;
             let hole_ratio_ppm = if box_area > 0.0 {
                 (covered / box_area * 1e6).round() as u64
@@ -367,6 +387,8 @@ pub(crate) fn separate(items: &[Item]) -> Layer2 {
                     hole_ratio_ppm,
                     outline_moments: moments
                         .second(rect.width() as f64 / 1000.0, rect.height() as f64 / 1000.0),
+                    wl_note: wl.is_none().then(|| "too_large".to_string()),
+                    wl,
                 },
             )
         })

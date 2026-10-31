@@ -23,7 +23,7 @@
 //! expanded blocks. Each such reference is counted in `not_measured`, so a
 //! signature short of what the drawing holds says so.
 //!
-//! # Quantization (`signature_version` 2)
+//! # Quantization (`signature_version` 3)
 //!
 //! - A length is taken to millimetres through the unit the header states and
 //!   rounded to the nearest micrometre (`f64::round`, halves away from zero).
@@ -34,6 +34,9 @@
 //!   millimetres of the micrometre value, so the binning itself does no
 //!   floating-point arithmetic.
 //! - A circle's diameter is kept exactly, in micrometres.
+//!
+//! Layer 3 counts the patterns the pieces of each view make where their ends
+//! meet; its labels and parameters are in the module doc of `wl`.
 //!
 //! A block reference whose scale is the same in every axis scales lengths and
 //! radii by that factor. Under a scale that differs between axes, a circle or
@@ -52,12 +55,13 @@ use crate::limits::{NotEntered, Walk};
 use crate::moments::Moments;
 use crate::summary::DimensionSummary;
 use crate::views::{self, Item, Rect, SheetMatch, View, VIEW_GAP_UM};
+use crate::wl::{Piece, WlParams, MAX_NODES};
 use std::collections::BTreeSet;
 use uncad_model::Affine2;
 
 /// The quantization this crate's signatures follow; see the module doc. A
 /// change to any rule there is a new version.
-pub const SIGNATURE_VERSION: u32 = 2;
+pub const SIGNATURE_VERSION: u32 = 3;
 
 /// A drawing's shape signature. See the module doc for what is counted and
 /// how lengths are quantized.
@@ -116,6 +120,9 @@ pub struct Signature {
     /// Without a frame everything on the sheet is separated into views
     /// alike.
     pub sheet_match: Option<SheetMatch>,
+    /// The parameters the patterns of each view's [`View::wl`] follow (layer
+    /// 3; see the module doc of `wl`).
+    pub wl_params: WlParams,
 }
 
 /// How many counted dimensions state a tolerance, by where they state it --
@@ -197,6 +204,8 @@ pub fn signature(db: &CadDatabase) -> Signature {
                 moments: item.moments,
                 entities: item.entities,
                 circle_diameters_um: item.diameters,
+                pieces: item.pieces,
+                pieces_over: item.pieces_over,
                 frame_candidate: is_axis_rectangle(e),
             });
         }
@@ -220,6 +229,7 @@ pub fn signature(db: &CadDatabase) -> Signature {
         sheet_match: layer2.as_ref().and_then(|l| l.sheet_match.clone()),
         views: layer2.map(|l| l.views),
         view_gap_um: VIEW_GAP_UM,
+        wl_params: WlParams::current(),
     }
 }
 
@@ -360,6 +370,10 @@ struct ItemCount {
     origin: [f64; 2],
     /// The length-weighted moments of its lines and arcs.
     moments: Moments,
+    /// Its lines, arcs and circles as the nodes of layer 3, in millimetres
+    /// in the world's plan -- up to [`MAX_NODES`], past which `pieces_over`.
+    pieces: Vec<Piece>,
+    pieces_over: bool,
 }
 
 fn bump(map: &mut BTreeMap<String, u64>, key: &str) {
@@ -385,6 +399,10 @@ impl Counter<'_> {
     /// units, to the outline of the top-level entity being walked.
     fn outline_line(&mut self, from: Point2D, to: Point2D) {
         let Some(k) = self.to_mm else { return };
+        self.piece(Piece::Line {
+            from: [from.x * k, from.y * k],
+            to: [to.x * k, to.y * k],
+        });
         let o = self.item.origin;
         self.item.moments.segment(
             [from.x * k - o[0], from.y * k - o[1]],
@@ -402,6 +420,13 @@ impl Counter<'_> {
         let c = m.apply(center);
         let u = linear(m, Point2D { x: radius, y: 0.0 });
         let v = linear(m, Point2D { x: 0.0, y: radius });
+        self.piece(Piece::Arc {
+            centre: [c.x * k, c.y * k],
+            u: [u.x * k, u.y * k],
+            v: [v.x * k, v.y * k],
+            start,
+            sweep,
+        });
         self.item.moments.arc(
             [c.x * k - o[0], c.y * k - o[1]],
             [u.x * k, u.y * k],
@@ -409,6 +434,16 @@ impl Counter<'_> {
             start,
             sweep,
         );
+    }
+
+    /// Adds a piece to the top-level entity being walked, as a node of layer
+    /// 3.
+    fn piece(&mut self, piece: Piece) {
+        if self.item.pieces.len() >= MAX_NODES {
+            self.item.pieces_over = true;
+        } else {
+            self.item.pieces.push(piece);
+        }
     }
 
     fn walk(&mut self, entities: &[Entity], at: &Transform) {
@@ -435,6 +470,7 @@ impl Counter<'_> {
                 match at.uniform {
                     Some(u) => {
                         if let Some(um) = self.micrometres(2.0 * c.radius * u) {
+                            self.piece(Piece::Circle { diameter_um: um });
                             *self.diameters.entry(um).or_insert(0) += 1;
                             *self.item.diameters.entry(um).or_insert(0) += 1;
                         }

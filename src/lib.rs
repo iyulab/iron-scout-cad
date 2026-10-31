@@ -32,6 +32,7 @@ mod select;
 mod signature;
 mod summary;
 mod views;
+mod wl;
 
 pub use extent::{BoundedBy, Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason, TableCellHit};
@@ -48,5 +49,9 @@ pub use summary::{
     UnresolvedInsert,
 };
 pub use views::{SheetFit, SheetMatch, View, MAX_ITEMS, MAX_VIEWS, VIEW_GAP_UM};
+pub use wl::{
+    PatternCounts, WlParams, ANGLE_TOLERANCE_DEG, ENDPOINT_GAP_UM, LABEL_HASH_OVER, MAX_KEYS,
+    MAX_NODES, ROUNDS,
+};
 
 pub use uncad_model::CadDatabase;

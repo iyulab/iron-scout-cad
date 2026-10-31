@@ -9,6 +9,16 @@ bumps the minor version.
 
 ### Added
 
+- The shape signature counts how a view's pieces are joined (`signature_version` 3, layer 3). Each view
+  has `wl`: its lines, arcs, polyline segments and circles are the nodes of a graph whose edges join two
+  pieces with an end of one within 100 micrometres of an end of the other, and for round 0, 1 and 2 of
+  Weisfeiler--Lehman refinement `wl.rounds` counts how many pieces carry each readable label -- a piece's
+  kind and size bin, then with how it meets its neighbours (`smooth` within 1 degree of a straight
+  continuation, `orthogonal`, `other`). `wl` is `None` with `wl_note` `"too_large"` for a view of more than
+  `MAX_NODES` pieces; a round keeps its `MAX_KEYS` most frequent labels and says when it cut. The
+  parameters are stated in `Signature::wl_params`. The counts do not change when a view is turned, moved or
+  mirrored, or when the entities are reordered; scaling it changes them. A line drawn as two pieces is
+  counted as two (pieces are not merged), and ellipses and splines are not nodes.
 - `labelled_texts` reads the layout ISO 7200 draws its fields in: a field's name a small text at the top
   left of the field and its value a larger text beneath it in the same column. Such a pair has
   `LabelledText::direction` `Below` (`LabelDirection`; the row pairs it always had are `Right`, the default
@@ -32,6 +42,7 @@ bumps the minor version.
 
 ### Changed
 
+- `SIGNATURE_VERSION` is 3 (a signature of version 2 is not comparable with it).
 - A title block drawn with names above values no longer yields false row pairs: a name used to be paired with
   the name beside it, and a value with the value beside it, and the value under a name was not found. The
   pairs for such a drawing now are the ones beneath. Row pairs of drawings that do not use the layout are
