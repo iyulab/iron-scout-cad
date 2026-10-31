@@ -252,7 +252,8 @@ pub enum DimensionRole {
     /// inside one pair, as in `(<>)` or `(125)` -- and the text is not
     /// boxed. A reference dimension -- given for information -- is written
     /// that way. Only a literal text is read: a measurement the drawing
-    /// computes carries no parentheses.
+    /// computes is not, even where the style's text suffix (`DIMPOST`)
+    /// wraps it in parentheses, so such a dimension has no role.
     Reference,
 }
 
@@ -441,7 +442,11 @@ impl DimensionSummary {
             block: d.block_name.clone(),
             kind: d.kind,
             measurement: d.measurement,
-            role: dimension_role(text_gap, plain_text.as_deref()),
+            role: dimension_role(
+                text_gap,
+                plain_text.as_deref(),
+                matches!(d.text_override, TextOverride::Suppressed),
+            ),
             text_gap,
             plain: plain_text,
             text: d.text_override.clone(),
@@ -475,8 +480,16 @@ impl DimensionSummary {
 /// plain form: boxed text (a negative gap) is a basic dimension unless the
 /// text is also parenthesized -- the file then states both marks and no role
 /// is read; a parenthesized text is a reference dimension only when the gap
-/// is known not to box it.
-fn dimension_role(gap: Option<f64>, plain_text: Option<&str>) -> Option<DimensionRole> {
+/// is known not to box it. A dimension whose text is suppressed draws none, so
+/// there is no text to be boxed or parenthesized and no role is read.
+fn dimension_role(
+    gap: Option<f64>,
+    plain_text: Option<&str>,
+    suppressed: bool,
+) -> Option<DimensionRole> {
+    if suppressed {
+        return None;
+    }
     let boxed = gap.is_some_and(|g| g < 0.0);
     let unboxed = gap.is_some_and(|g| g >= 0.0);
     let parenthesized = plain_text.is_some_and(enclosed_in_parentheses);

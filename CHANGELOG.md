@@ -12,8 +12,8 @@ bumps the minor version.
 - `DimensionSummary::text_gap` (DIMGAP in force for the dimension -- its style's, or its own override;
   negative when the text is drawn in a box) and `DimensionSummary::role`, the `DimensionRole` the file
   states: `Basic` for boxed text (a basic dimension is written that way) and `Reference` for a text
-  wholly in parentheses that is not boxed. A dimension that states neither mark, both, or whose gap is
-  not known has no role: nothing is guessed. Needs `uncad-model` with `DimStyleRecord::text_gap`.
+  wholly in parentheses that is not boxed. A dimension that states neither mark, both, whose text is
+  suppressed, or whose gap is not known has no role: nothing is guessed. Needs `uncad-model` with `DimStyleRecord::text_gap`.
 
 - `DimensionSummary::block`: the anonymous block that draws the dimension, as the file names it
   (the same fact `TableSummary::block` states for a table). A consumer that folds what a dimension
