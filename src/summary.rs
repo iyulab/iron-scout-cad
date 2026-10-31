@@ -937,8 +937,11 @@ fn is_space(name: &str) -> bool {
 /// the world's: a text written in a mirror copy's plane is where it is
 /// drawn, and one on a plane tilted out of the world's is not paired, since
 /// no 2D position places it exactly.
-/// The label-value pairs among the loose texts, and the loose texts that
-/// could not take part because their plane is tilted.
+///
+/// Each space (model space, every paper-space sheet) is paired on its own: a
+/// sheet's coordinates are its own, so a name and a value in different spaces
+/// are never a pair. Returns the pairs, and the loose texts that could not
+/// take part because their plane is tilted.
 fn labelled_texts(
     db: &CadDatabase,
     spaces: &BTreeMap<EntityId, &str>,
@@ -953,7 +956,35 @@ fn labelled_texts(
         }
     }
     unplaced.sort_by_key(|t| t.id);
-    let (mut pairs, stacked) = stacked_pairs(&texts, spaces);
+    // A space's coordinates are its own: a text on a layout sheet at the spot
+    // a model-space name has a value under is nothing of that name's. Each
+    // space is paired alone. A text no space record lists (a model built by
+    // hand, not read from a file) is taken as model space's.
+    let mut by_space: BTreeMap<String, Vec<PlacedText<'_>>> = BTreeMap::new();
+    for placed in texts {
+        let space = spaces
+            .get(&placed.0.common.id)
+            .copied()
+            .unwrap_or("*Model_Space");
+        by_space
+            .entry(space.to_ascii_uppercase())
+            .or_default()
+            .push(placed);
+    }
+    let mut pairs = Vec::new();
+    for texts in by_space.values() {
+        pairs.extend(pair_in_one_space(texts, spaces));
+    }
+    pairs.sort_by_key(|l| (l.label.id, l.value.id));
+    (pairs, unplaced)
+}
+
+/// The label–value pairs among the loose texts of one space.
+fn pair_in_one_space(
+    texts: &[PlacedText<'_>],
+    spaces: &BTreeMap<EntityId, &str>,
+) -> Vec<LabelledText> {
+    let (mut pairs, stacked) = stacked_pairs(texts, spaces);
     for &(label, here) in texts
         .iter()
         .filter(|(t, _)| !stacked.contains(&t.common.id))
@@ -995,8 +1026,7 @@ fn labelled_texts(
             });
         }
     }
-    pairs.sort_by_key(|l| (l.label.id, l.value.id));
-    (pairs, unplaced)
+    pairs
 }
 
 /// A loose text and where its baseline starts, in world coordinates.

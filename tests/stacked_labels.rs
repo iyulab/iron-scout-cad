@@ -52,6 +52,18 @@ fn text_mut<'a>(db: &'a mut CadDatabase, text: &str) -> &'a mut uncad_model::mod
         .expect("G23 has that text")
 }
 
+/// Adds `text` where a reader puts a top-level text: in the flat list and in
+/// the model-space record that lists the space's entities.
+fn add_text(db: &mut CadDatabase, text: uncad_model::model::TextEntity) {
+    db.tables
+        .block_records
+        .get_mut("*Model_Space")
+        .expect("model space")
+        .entities
+        .push(Entity::Text(text.clone()));
+    db.entities.push(Entity::Text(text));
+}
+
 #[test]
 fn a_value_beneath_its_name_is_paired_and_neighbouring_fields_are_not() {
     let s = summarize(&g23());
@@ -136,7 +148,7 @@ fn a_text_between_a_name_and_the_value_under_it_blocks_the_pair() {
     between.text = "in the way".to_string();
     between.start_point.y += 2.5; // level with neither, in the same column
     between.text_height = 1.0;
-    db.entities.push(Entity::Text(between));
+    add_text(&mut db, between);
     let s = summarize(&db);
     assert!(
         !named_with_a_value_beneath(&s).contains(&"Responsible dept.".to_string()),
@@ -178,7 +190,7 @@ fn with_text(
     t.start_point.x = at.0;
     t.start_point.y = at.1;
     t.text_height = height;
-    db.entities.push(Entity::Text(t));
+    add_text(&mut db, t);
     db
 }
 
@@ -361,4 +373,92 @@ fn the_direction_and_continuation_serialize_and_old_pairs_still_read() {
     let read: LabelledText = serde_json::from_value(old).unwrap();
     assert_eq!(read.direction, LabelDirection::Right);
     assert!(read.continued_by.is_empty());
+}
+
+/// Moves the text `value` to the paper-space sheet's record, where the
+/// model lists it as that sheet's entity (it stays in the flat list too).
+fn move_to_paper_space(db: &mut CadDatabase, value: &str) {
+    let records = &mut db.tables.block_records;
+    let model = records.get_mut("*Model_Space").expect("model space");
+    let at = model
+        .entities
+        .iter()
+        .position(|e| matches!(e, Entity::Text(t) if t.text == value))
+        .expect("the text is in model space");
+    let moved = model.entities.remove(at);
+    records
+        .get_mut("*Paper_Space")
+        .expect("the golden has a paper-space record")
+        .entities
+        .push(moved);
+}
+
+#[test]
+fn a_pair_beneath_does_not_cross_from_model_space_to_a_sheet() {
+    // A sheet's coordinates are its own: a text drawn on a layout sheet at the
+    // spot a model-space name has a value under is not that name's value.
+    let mut db = g23();
+    assert_eq!(summarize(&db).labelled("Rev."), Lookup::Unique("A"));
+    move_to_paper_space(&mut db, "A");
+    let s = summarize(&db);
+    assert_eq!(s.labelled("Rev."), Lookup::Absent, "{:?}", pairs(&s));
+    assert!(!pairs(&s).iter().any(|(l, v, ..)| l == "Rev." || v == "A"));
+    // The other fields are untouched.
+    assert_eq!(s.labelled("Responsible dept."), Lookup::Unique("ABC 2"));
+}
+
+#[test]
+fn a_pair_on_a_row_does_not_cross_from_model_space_to_a_sheet() {
+    let mut db = g7();
+    let first = summarize(&db).labelled_texts[0].clone();
+    assert_eq!(first.direction, LabelDirection::Right);
+    move_to_paper_space(&mut db, &first.value.text);
+    let s = summarize(&db);
+    assert!(
+        !s.labelled_texts
+            .iter()
+            .any(|l| l.label.id == first.label.id && l.value.id == first.value.id),
+        "{:?}",
+        pairs(&s)
+    );
+}
+
+#[test]
+fn a_name_and_its_value_both_on_a_sheet_are_still_a_pair_whatever_the_sheets_name() {
+    let mut db = g23();
+    for text in ["Rev.", "A"] {
+        move_to_paper_space(&mut db, text);
+    }
+    // The sheet's record name is compared without regard to case, and a
+    // numbered sheet is a sheet of its own.
+    let mut records = std::mem::take(&mut db.tables.block_records);
+    let mut sheet = records
+        .remove("*Paper_Space")
+        .expect("the paper-space record");
+    sheet.name = "*PAPER_SPACE0".to_string();
+    records.insert(sheet.name.clone(), sheet);
+    db.tables.block_records = records;
+    let s = summarize(&db);
+    assert_eq!(s.labelled("Rev."), Lookup::Unique("A"), "{:?}", pairs(&s));
+}
+
+#[test]
+fn texts_on_two_sheets_do_not_pair_across_them() {
+    let mut db = g23();
+    move_to_paper_space(&mut db, "Rev.");
+    // "A" goes to a second sheet.
+    let records = &mut db.tables.block_records;
+    let model = records.get_mut("*Model_Space").expect("model space");
+    let at = model
+        .entities
+        .iter()
+        .position(|e| matches!(e, Entity::Text(t) if t.text == "A"))
+        .expect("the value is in model space");
+    let value = model.entities.remove(at);
+    let mut second = records.get("*Paper_Space").expect("sheet").clone();
+    second.name = "*Paper_Space1".to_string();
+    second.entities = vec![value];
+    records.insert(second.name.clone(), second);
+    let s = summarize(&db);
+    assert_eq!(s.labelled("Rev."), Lookup::Absent, "{:?}", pairs(&s));
 }

@@ -63,6 +63,10 @@ bumps the minor version.
   of a name is part of such a pair, the name has no value on its row.
 - `DrawingUnits` no longer implements `Eq` (it now holds an `f64`).
 
+### Fixed
+
+- `labelled_texts` pairs the loose texts of each space on their own. A sheet's coordinates are its own, so a text drawn on a layout sheet at the spot a model-space name has a value under (or beside) was read as that name's value; a name and a value in different spaces are no longer a pair. A text that no space record lists is taken as model space's.
+
 ## [0.14.0] - 2026-10-30
 
 ### Added
