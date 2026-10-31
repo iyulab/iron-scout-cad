@@ -315,107 +315,15 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
             ),
             inside: false,
         },
-        Entity::Circle(c) => {
-            let (Some(plane), Some(s)) = (flat_plane(c.extrusion), scale) else {
-                return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
-            };
-            let r = c.radius * s;
-            let d = distance(p, at(world_xy(plane, c.center)));
-            Where::Geometry {
-                distance: (d - r).abs(),
-                inside: d < r,
-            }
-        }
-        Entity::Arc(a) => {
-            let (Some(plane), Some(s)) = (flat_plane(a.extrusion), scale) else {
-                return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
-            };
-            // An arc whose angles are equal has no sweep: the file does not
-            // say whether it is the whole circle or nothing.
-            let Some(sweep) = a.sweep() else {
-                return Where::NotSearched(NotSearchedReason::CurveUndefined);
-            };
-            // Seen from below (a mirror copy's plane) the arc's own
-            // counter-clockwise sweep runs clockwise in the world, so its
-            // world start is where its own end is.
-            let start = if plane.z_axis().z < 0.0 {
-                world_angle(plane, a.end_angle)
-            } else {
-                world_angle(plane, a.start_angle)
-            };
-            let turn = t.rotation();
-            Where::Geometry {
-                distance: distance_to_arc(
-                    p,
-                    at(world_xy(plane, a.center)),
-                    a.radius * s,
-                    start + turn,
-                    sweep,
-                ),
-                inside: false,
-            }
-        }
-        Entity::LwPolyline(pl) | Entity::Polyline2D(pl) => {
-            let Some(plane) = flat_plane(pl.extrusion) else {
-                return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
-            };
-            let has_arcs = pl.vertices.iter().any(|v| v.bulge != 0.0);
-            if has_arcs && scale.is_none() {
-                return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
-            }
-            // Each vertex taken to the world and through the placement. A
-            // bulge's sign is its arc's turning direction, which a mirror
-            // copy's plane reverses and a similarity keeps.
-            let turning = plane.z_axis().z.signum();
-            let placed: Vec<PolylineVertex> = pl
-                .vertices
-                .iter()
-                .map(|v| PolylineVertex {
-                    point: at(world_xy(
-                        plane,
-                        Point3D {
-                            x: v.point.x,
-                            y: v.point.y,
-                            z: pl.elevation,
-                        },
-                    )),
-                    bulge: v.bulge * turning,
-                    ..*v
-                })
-                .collect();
-            let segments: Vec<Segment> = bulge::segments(&placed, pl.closed).collect();
-            match distance_to_segments(p, &segments) {
-                Some(distance) => Where::Geometry {
-                    distance,
-                    inside: pl.closed && shape_contains(p, &segments),
-                },
-                None => Where::NotSearched(NotSearchedReason::NoGeometry),
-            }
-        }
+        Entity::Circle(c) => locate_circle(c, p, t, scale),
+        Entity::Arc(a) => locate_arc(a, p, t, scale),
+        Entity::LwPolyline(pl) | Entity::Polyline2D(pl) => locate_lw_polyline(pl, p, t, scale),
         Entity::Point(pt) => Where::Geometry {
             distance: distance(p, at(xy(pt.position))),
             inside: false,
         },
-        Entity::Text(e) => match in_plane(e.extrusion, t) {
-            Some(t) => Where::Anchor(text_anchor_distance(
-                p,
-                &t,
-                e.start_point,
-                e.alignment_point,
-                e.horizontal_justification,
-            )),
-            None => Where::NotSearched(NotSearchedReason::NonSimilarPlacement),
-        },
-        Entity::Attrib(a) => match in_plane(a.extrusion, t) {
-            Some(t) => Where::Anchor(text_anchor_distance(
-                p,
-                &t,
-                a.start_point,
-                a.alignment_point,
-                a.horizontal_justification,
-            )),
-            None => Where::NotSearched(NotSearchedReason::NonSimilarPlacement),
-        },
+        Entity::Text(e) => locate_text(e, p, t),
+        Entity::Attrib(a) => locate_attrib(a, p, t),
         Entity::Attdef(a) => Where::Anchor(text_anchor_distance(
             p,
             t,
@@ -430,44 +338,8 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
         // model does not carry.
         Entity::MText(m) => Where::Anchor(distance(p, at(xy(m.insertion_point)))),
         Entity::Tolerance(f) => Where::Anchor(distance(p, at(xy(f.insertion_point)))),
-        Entity::Solid(s) | Entity::Trace(s) => {
-            let Some(plane) = flat_plane(s.extrusion) else {
-                return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
-            };
-            let corner = |c: Point2D| {
-                at(world_xy(
-                    plane,
-                    Point3D {
-                        x: c.x,
-                        y: c.y,
-                        z: s.elevation,
-                    },
-                ))
-            };
-            // Filled through its corners in 1-2-4-3 order.
-            outline(
-                p,
-                &[
-                    corner(s.corner1),
-                    corner(s.corner2),
-                    corner(s.corner4),
-                    corner(s.corner3),
-                ],
-                true,
-            )
-        }
-        Entity::Face3D(f) => {
-            // Only the edges the file draws; seen from above, as a LINE is.
-            let corners = [f.corner1, f.corner2, f.corner3, f.corner4].map(|c| at(xy(c)));
-            let distance = (0..4)
-                .filter(|&i| !f.invisible_edges[i])
-                .map(|i| distance_to_segment(p, corners[i], corners[(i + 1) % 4]))
-                .fold(f64::INFINITY, f64::min);
-            Where::Geometry {
-                distance,
-                inside: false,
-            }
-        }
+        Entity::Solid(s) | Entity::Trace(s) => locate_solid(s, p, t),
+        Entity::Face3D(f) => locate_face3_d(f, p, t),
         Entity::Wipeout(w) => {
             let boundary: Vec<Point2D> = w.boundary.iter().map(|&q| at(q)).collect();
             outline(p, &boundary, true)
@@ -504,65 +376,14 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
         }
         // Where the model says it is drawn: each line on to its root's last
         // leader line point, unless the lines have no type, and each dogleg.
-        Entity::MultiLeader(m) => {
-            let doglegs = m.doglegs().into_iter().map(Vec::from);
-            let lines = match m.line_type {
-                Some(LeaderLineType::Invisible) => Vec::new(),
-                _ => m.drawn_lines(),
-            };
-            let lines = lines
-                .into_iter()
-                .chain(doglegs)
-                .map(|line| line.iter().map(|&v| at(xy(v))).collect::<Vec<_>>())
-                .filter_map(|line| straight_distance(p, &line, false))
-                .reduce(f64::min);
-            // What it points out is anchored where the record places it, as
-            // an MTEXT's text or a block reference's block is: the nearer of
-            // the lines and that anchor is where the point meets it.
-            let content = multileader_content_at(m).map(|c| distance(p, at(xy(c))));
-            match (lines, content) {
-                (Some(d), Some(a)) if a < d => Where::Anchor(a),
-                (Some(distance), _) => Where::Geometry {
-                    distance,
-                    inside: false,
-                },
-                (None, Some(a)) => Where::Anchor(a),
-                (None, None) => Where::NotSearched(NotSearchedReason::NoGeometry),
-            }
-        }
+        Entity::MultiLeader(m) => locate_multi_leader(m, p, t),
         // Its boundary, in its own plane, where the renderer outlines it: a
         // point inside the area it bounds is enclosed by it.
-        Entity::Hatch(h) => match crate::boundary::hatch(h, t, tolerance) {
-            Err(reason) => Where::NotSearched(reason),
-            Ok(boundary) => match boundary.distance(p) {
-                None => Where::NotSearched(NotSearchedReason::NoGeometry),
-                Some(distance) => {
-                    let inside = boundary.contains(p);
-                    match boundary.within {
-                        Some(within) => Where::Chords {
-                            distance,
-                            inside,
-                            within,
-                        },
-                        None => Where::Geometry { distance, inside },
-                    }
-                }
-            },
-        },
+        Entity::Hatch(h) => locate_hatch(h, p, t, tolerance),
         // A construction line, seen from above as a LINE is: from its base
         // point one way (RAY) or both (XLINE). One that runs straight up is
         // its base point in plan.
-        Entity::Ray(r) | Entity::XLine(r) => {
-            let base = at(xy(r.point));
-            let toward = at(Point2D {
-                x: r.point.x + r.vector.x,
-                y: r.point.y + r.vector.y,
-            });
-            Where::Geometry {
-                distance: distance_to_line(p, base, toward, matches!(entity, Entity::Ray(_))),
-                inside: false,
-            }
-        }
+        Entity::Ray(r) | Entity::XLine(r) => locate_ray(r, entity, p, t),
         // Where the light is, as a POINT is where it is: its target is where
         // it aims, not where it sits.
         Entity::Light(l) => Where::Geometry {
@@ -577,25 +398,7 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
         // The frame on the sheet; what it shows of the model is not searched
         // here -- that is model space, with coordinates of its own.
         Entity::Viewport(v) if is_overall(v) => Where::Sheet,
-        Entity::Viewport(v) => {
-            let (hw, hh) = (v.width / 2.0, v.height / 2.0);
-            let corner = |sx: f64, sy: f64| {
-                at(Point2D {
-                    x: v.center.x + sx * hw,
-                    y: v.center.y + sy * hh,
-                })
-            };
-            outline(
-                p,
-                &[
-                    corner(-1.0, -1.0),
-                    corner(1.0, -1.0),
-                    corner(1.0, 1.0),
-                    corner(-1.0, 1.0),
-                ],
-                true,
-            )
-        }
+        Entity::Viewport(v) => locate_viewport(v, p, t),
         Entity::Image(i) => match image_frame(i) {
             Some(frame) => {
                 let frame: Vec<Point2D> = frame.into_iter().map(at).collect();
@@ -632,6 +435,283 @@ fn locate(entity: &Entity, p: Point2D, t: &Affine2, scale: Option<f64>, toleranc
         }
         _ => Where::Unsupported,
     }
+}
+
+/// Where the point `p` lies against one Circle entity.
+fn locate_circle(
+    c: &uncad_model::model::CircleEntity,
+    p: Point2D,
+    t: &Affine2,
+    scale: Option<f64>,
+) -> Where {
+    let at = |q| t.apply(q);
+    let (Some(plane), Some(s)) = (flat_plane(c.extrusion), scale) else {
+        return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
+    };
+    let r = c.radius * s;
+    let d = distance(p, at(world_xy(plane, c.center)));
+    Where::Geometry {
+        distance: (d - r).abs(),
+        inside: d < r,
+    }
+}
+
+/// Where the point `p` lies against one Arc entity.
+fn locate_arc(
+    a: &uncad_model::model::ArcEntity,
+    p: Point2D,
+    t: &Affine2,
+    scale: Option<f64>,
+) -> Where {
+    let at = |q| t.apply(q);
+    let (Some(plane), Some(s)) = (flat_plane(a.extrusion), scale) else {
+        return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
+    };
+    // An arc whose angles are equal has no sweep: the file does not
+    // say whether it is the whole circle or nothing.
+    let Some(sweep) = a.sweep() else {
+        return Where::NotSearched(NotSearchedReason::CurveUndefined);
+    };
+    // Seen from below (a mirror copy's plane) the arc's own
+    // counter-clockwise sweep runs clockwise in the world, so its
+    // world start is where its own end is.
+    let start = if plane.z_axis().z < 0.0 {
+        world_angle(plane, a.end_angle)
+    } else {
+        world_angle(plane, a.start_angle)
+    };
+    let turn = t.rotation();
+    Where::Geometry {
+        distance: distance_to_arc(
+            p,
+            at(world_xy(plane, a.center)),
+            a.radius * s,
+            start + turn,
+            sweep,
+        ),
+        inside: false,
+    }
+}
+
+/// Where the point `p` lies against one LwPolyline / Polyline2D entity.
+fn locate_lw_polyline(
+    pl: &uncad_model::model::LwPolylineEntity,
+    p: Point2D,
+    t: &Affine2,
+    scale: Option<f64>,
+) -> Where {
+    let at = |q| t.apply(q);
+    let Some(plane) = flat_plane(pl.extrusion) else {
+        return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
+    };
+    let has_arcs = pl.vertices.iter().any(|v| v.bulge != 0.0);
+    if has_arcs && scale.is_none() {
+        return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
+    }
+    // Each vertex taken to the world and through the placement. A
+    // bulge's sign is its arc's turning direction, which a mirror
+    // copy's plane reverses and a similarity keeps.
+    let turning = plane.z_axis().z.signum();
+    let placed: Vec<PolylineVertex> = pl
+        .vertices
+        .iter()
+        .map(|v| PolylineVertex {
+            point: at(world_xy(
+                plane,
+                Point3D {
+                    x: v.point.x,
+                    y: v.point.y,
+                    z: pl.elevation,
+                },
+            )),
+            bulge: v.bulge * turning,
+            ..*v
+        })
+        .collect();
+    let segments: Vec<Segment> = bulge::segments(&placed, pl.closed).collect();
+    match distance_to_segments(p, &segments) {
+        Some(distance) => Where::Geometry {
+            distance,
+            inside: pl.closed && shape_contains(p, &segments),
+        },
+        None => Where::NotSearched(NotSearchedReason::NoGeometry),
+    }
+}
+
+/// Where the point `p` lies against one Text entity.
+fn locate_text(e: &uncad_model::model::TextEntity, p: Point2D, t: &Affine2) -> Where {
+    match in_plane(e.extrusion, t) {
+        Some(t) => Where::Anchor(text_anchor_distance(
+            p,
+            &t,
+            e.start_point,
+            e.alignment_point,
+            e.horizontal_justification,
+        )),
+        None => Where::NotSearched(NotSearchedReason::NonSimilarPlacement),
+    }
+}
+
+/// Where the point `p` lies against one Attrib entity.
+fn locate_attrib(a: &uncad_model::model::AttribEntity, p: Point2D, t: &Affine2) -> Where {
+    match in_plane(a.extrusion, t) {
+        Some(t) => Where::Anchor(text_anchor_distance(
+            p,
+            &t,
+            a.start_point,
+            a.alignment_point,
+            a.horizontal_justification,
+        )),
+        None => Where::NotSearched(NotSearchedReason::NonSimilarPlacement),
+    }
+}
+
+/// Where the point `p` lies against one Solid / Trace entity.
+fn locate_solid(s: &uncad_model::model::SolidEntity, p: Point2D, t: &Affine2) -> Where {
+    let at = |q| t.apply(q);
+    let Some(plane) = flat_plane(s.extrusion) else {
+        return Where::NotSearched(NotSearchedReason::NonSimilarPlacement);
+    };
+    let corner = |c: Point2D| {
+        at(world_xy(
+            plane,
+            Point3D {
+                x: c.x,
+                y: c.y,
+                z: s.elevation,
+            },
+        ))
+    };
+    // Filled through its corners in 1-2-4-3 order.
+    outline(
+        p,
+        &[
+            corner(s.corner1),
+            corner(s.corner2),
+            corner(s.corner4),
+            corner(s.corner3),
+        ],
+        true,
+    )
+}
+
+/// Where the point `p` lies against one Face3D entity.
+fn locate_face3_d(f: &uncad_model::model::Face3DEntity, p: Point2D, t: &Affine2) -> Where {
+    let at = |q| t.apply(q);
+    // Only the edges the file draws; seen from above, as a LINE is.
+    let corners = [f.corner1, f.corner2, f.corner3, f.corner4].map(|c| at(xy(c)));
+    let distance = (0..4)
+        .filter(|&i| !f.invisible_edges[i])
+        .map(|i| distance_to_segment(p, corners[i], corners[(i + 1) % 4]))
+        .fold(f64::INFINITY, f64::min);
+    Where::Geometry {
+        distance,
+        inside: false,
+    }
+}
+
+/// Where the model says it is drawn: each line on to its root's last
+/// leader line point, unless the lines have no type, and each dogleg.
+fn locate_multi_leader(
+    m: &uncad_model::model::MultiLeaderEntity,
+    p: Point2D,
+    t: &Affine2,
+) -> Where {
+    let at = |q| t.apply(q);
+    let doglegs = m.doglegs().into_iter().map(Vec::from);
+    let lines = match m.line_type {
+        Some(LeaderLineType::Invisible) => Vec::new(),
+        _ => m.drawn_lines(),
+    };
+    let lines = lines
+        .into_iter()
+        .chain(doglegs)
+        .map(|line| line.iter().map(|&v| at(xy(v))).collect::<Vec<_>>())
+        .filter_map(|line| straight_distance(p, &line, false))
+        .reduce(f64::min);
+    // What it points out is anchored where the record places it, as
+    // an MTEXT's text or a block reference's block is: the nearer of
+    // the lines and that anchor is where the point meets it.
+    let content = multileader_content_at(m).map(|c| distance(p, at(xy(c))));
+    match (lines, content) {
+        (Some(d), Some(a)) if a < d => Where::Anchor(a),
+        (Some(distance), _) => Where::Geometry {
+            distance,
+            inside: false,
+        },
+        (None, Some(a)) => Where::Anchor(a),
+        (None, None) => Where::NotSearched(NotSearchedReason::NoGeometry),
+    }
+}
+
+/// Its boundary, in its own plane, where the renderer outlines it: a
+/// point inside the area it bounds is enclosed by it.
+fn locate_hatch(
+    h: &uncad_model::model::HatchEntity,
+    p: Point2D,
+    t: &Affine2,
+    tolerance: f64,
+) -> Where {
+    match crate::boundary::hatch(h, t, tolerance) {
+        Err(reason) => Where::NotSearched(reason),
+        Ok(boundary) => match boundary.distance(p) {
+            None => Where::NotSearched(NotSearchedReason::NoGeometry),
+            Some(distance) => {
+                let inside = boundary.contains(p);
+                match boundary.within {
+                    Some(within) => Where::Chords {
+                        distance,
+                        inside,
+                        within,
+                    },
+                    None => Where::Geometry { distance, inside },
+                }
+            }
+        },
+    }
+}
+
+/// A construction line, seen from above as a LINE is: from its base
+/// point one way (RAY) or both (XLINE). One that runs straight up is
+/// its base point in plan.
+fn locate_ray(
+    r: &uncad_model::model::RayEntity,
+    entity: &Entity,
+    p: Point2D,
+    t: &Affine2,
+) -> Where {
+    let at = |q| t.apply(q);
+    let base = at(xy(r.point));
+    let toward = at(Point2D {
+        x: r.point.x + r.vector.x,
+        y: r.point.y + r.vector.y,
+    });
+    Where::Geometry {
+        distance: distance_to_line(p, base, toward, matches!(entity, Entity::Ray(_))),
+        inside: false,
+    }
+}
+
+/// Where the point `p` lies against one Viewport entity.
+fn locate_viewport(v: &uncad_model::model::ViewportEntity, p: Point2D, t: &Affine2) -> Where {
+    let at = |q| t.apply(q);
+    let (hw, hh) = (v.width / 2.0, v.height / 2.0);
+    let corner = |sx: f64, sy: f64| {
+        at(Point2D {
+            x: v.center.x + sx * hw,
+            y: v.center.y + sy * hh,
+        })
+    };
+    outline(
+        p,
+        &[
+            corner(-1.0, -1.0),
+            corner(1.0, -1.0),
+            corner(1.0, 1.0),
+            corner(-1.0, 1.0),
+        ],
+        true,
+    )
 }
 
 /// Whether `vp` is its layout's overall viewport: the sheet as paper space
