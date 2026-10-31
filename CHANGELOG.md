@@ -9,6 +9,9 @@ bumps the minor version.
 
 ### Added
 
+- `Summary::without(&[Part])` leaves a part out of a summary -- `Part::Signature` is the shape signature, the
+  largest part for a drawing with many views -- and `Summary::omitted` names the parts left out, so a part
+  that is not there is never read as one that is empty. A summary has none left out unless it is projected.
 - The shape signature counts how a view's pieces are joined (`signature_version` 3, layer 3). Each view
   has `wl`: its lines, arcs, polyline segments and circles are the nodes of a graph whose edges join two
   pieces with an end of one within 100 micrometres of an end of the other, and for round 0, 1 and 2 of
@@ -46,6 +49,8 @@ bumps the minor version.
 
 ### Changed
 
+- **Breaking:** `Summary::signature` is `Option<Signature>`: `None` only when the summary was projected
+  without it (`Summary::without`); `summarize` always gives `Some`. On the wire the field is absent then.
 - `SIGNATURE_VERSION` is 3 (a signature of version 2 is not comparable with it).
 - A title block drawn with names above values no longer yields false row pairs: a name used to be paired with
   the name beside it, and a value with the value beside it, and the value under a name was not found. The

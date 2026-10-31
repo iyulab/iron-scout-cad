@@ -691,7 +691,14 @@ pub struct Summary {
     pub extents: Vec<SpaceExtent>,
     /// The drawing's shape signature: what its model space draws, counted
     /// into integers whose places each have a meaning (see [`Signature`]).
-    pub signature: Signature,
+    /// `None` only when the summary was projected without it
+    /// ([`Summary::without`]), which [`Self::omitted`] then says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Signature>,
+    /// The parts a projection left out ([`Summary::without`]), so that a part
+    /// that is not there is never mistaken for a part that is empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted: Vec<Part>,
     /// The entities a [`Selection`] picked, when the summary was asked for
     /// one ([`summarize_with`]); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -703,7 +710,35 @@ pub struct Summary {
     pub warnings: Vec<String>,
 }
 
+/// A part of a [`Summary`] a projection can leave out ([`Summary::without`]),
+/// named as the summary names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Part {
+    /// The shape signature: the largest part of the summary of a drawing
+    /// with many views.
+    Signature,
+}
+
 impl Summary {
+    /// This summary without the `parts`, each named in [`Self::omitted`]
+    /// (once, however often it is asked for). The rest is unchanged, and
+    /// the same parts left out of a summary that already lacks them change
+    /// nothing.
+    #[must_use]
+    pub fn without(mut self, parts: &[Part]) -> Summary {
+        for part in parts {
+            match part {
+                Part::Signature => self.signature = None,
+            }
+            if !self.omitted.contains(part) {
+                self.omitted.push(*part);
+            }
+        }
+        self
+    }
+
     /// The value of the attribute `tag` across the drawing's block
     /// references, as plain text: one distinct value, none, or several (all
     /// listed).
@@ -876,7 +911,8 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         tolerance_frames,
         tables,
         extents: crate::extent::space_extents(db),
-        signature: signature(db),
+        signature: Some(signature(db)),
+        omitted: Vec::new(),
         selection: None,
         confidence,
         warnings: db.read_diagnostics.warnings.clone(),

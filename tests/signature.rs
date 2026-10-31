@@ -2,7 +2,7 @@
 //! holes, four dimensions and a title block reference carrying attributes)
 //! and on edits of it made directly in the model.
 
-use iron_scout_cad::{signature, summarize, Signature, SIGNATURE_VERSION};
+use iron_scout_cad::{signature, summarize, Part, Signature, SIGNATURE_VERSION};
 use std::collections::BTreeMap;
 use uncad_model::model::Entity;
 use uncad_model::CadDatabase;
@@ -67,7 +67,36 @@ fn the_plate_counts_its_outline_holes_and_dimensions_and_reports_the_title_block
     );
     assert!(s.not_measured.is_empty(), "{:?}", s.not_measured);
     // The summary carries the same signature.
-    assert_eq!(summarize(&g1()).signature, s);
+    assert_eq!(summarize(&g1()).signature, Some(s));
+}
+
+#[test]
+fn a_summary_without_its_signature_says_so_and_keeps_the_rest() {
+    let full = summarize(&g1());
+    assert!(full.signature.is_some());
+    assert!(full.omitted.is_empty());
+
+    let cut = full.clone().without(&[Part::Signature, Part::Signature]);
+    assert_eq!(cut.signature, None);
+    assert_eq!(cut.omitted, vec![Part::Signature]);
+    // Nothing else moved.
+    let mut restored = cut.clone();
+    restored.signature = full.signature.clone();
+    restored.omitted.clear();
+    assert_eq!(restored, full);
+
+    // On the wire the part is absent and named, not empty.
+    let json = serde_json::to_value(&cut).unwrap();
+    assert!(json.get("signature").is_none());
+    assert_eq!(json["omitted"], serde_json::json!(["signature"]));
+    let full_json = serde_json::to_value(&full).unwrap();
+    assert!(full_json.get("signature").is_some());
+    assert!(full_json.get("omitted").is_none());
+
+    // And it reads back as what it was.
+    let back: iron_scout_cad::Summary = serde_json::from_value(json).unwrap();
+    assert_eq!(back, cut);
+    assert_eq!(cut.clone().without(&[Part::Signature]), cut);
 }
 
 #[test]
