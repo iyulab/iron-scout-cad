@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-02
+
 ### Added
 
 - `contours(db, join_gap_um)`: which outlines of the model space close. The straight and circular pieces
@@ -108,6 +110,8 @@ bumps the minor version.
 - The row rule no longer skips over a text that belongs to a pair beneath: when the nearest text to the right
   of a name is part of such a pair, the name has no value on its row.
 - `DrawingUnits` no longer implements `Eq` (it now holds an `f64`).
+
+- Built on `uncad-model` 0.11.0.
 
 ### Fixed
 
