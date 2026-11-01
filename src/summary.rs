@@ -6,8 +6,8 @@ use crate::signature::{signature, Signature};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::model::{
-    AcadTableEntity, Confidence, DimensionEntity, DimensionKind, Entity, EntityId, Ref,
-    StyleOverride, TextOverride,
+    AcadTableEntity, Confidence, DimensionEntity, DimensionKind, Entity, EntityId, OrdinateAxis,
+    Ref, StyleOverride, TextOverride,
 };
 use uncad_model::tables::{ExternalReference, Tables};
 use uncad_model::text::TextKind;
@@ -188,6 +188,17 @@ pub struct DimensionSummary {
     /// the dimension (a model built by hand, not read from a file).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
+    /// Which coordinate an ordinate dimension measures from its datum
+    /// (DXF 70, bit 64); `None` on every other kind and where the file
+    /// does not state it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinate_axis: Option<OrdinateAxis>,
+    /// The angle a rotated linear dimension is measured along (DXF 50),
+    /// radians away from the horizontal. Set only on a [`DimensionKind::Rotated`]
+    /// dimension -- on the other kinds the group means nothing and the
+    /// model's 0 is not a statement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f64>,
     /// The text the dimension shows, as the model folds it: the
     /// measurement, nothing, or a literal (which may stand `<>` for the
     /// measurement inside a longer string).
@@ -447,6 +458,8 @@ impl DimensionSummary {
             id: d.common.id,
             block: d.block_name.clone(),
             space: None,
+            ordinate_axis: d.ordinate_axis,
+            rotation: matches!(d.kind, Some(DimensionKind::Rotated)).then_some(d.rotation),
             kind: d.kind,
             measurement: d.measurement,
             role: dimension_role(

@@ -9,6 +9,10 @@ bumps the minor version.
 
 ### Added
 
+- `DimensionSummary::ordinate_axis` (the coordinate an ordinate dimension measures from its datum) and
+  `DimensionSummary::rotation` (the angle a rotated linear dimension is measured along, radians) carry what the
+  model holds, so a listing no longer needs the detailed view to tell an x ordinate from a y one. Each is absent
+  where the group means nothing -- `rotation` only on a rotated linear dimension.
 - `DimensionSummary::space` names the space a dimension is drawn in, as `TextRef::space` and `TableSummary::space`
   do (`None`, and left out of the serialized answer, when no space record lists the dimension): its points and
   its text's middle are only places on a picture of that space.
