@@ -30,7 +30,12 @@ bumps the minor version.
   What is not turned into a field is named in `unknown` -- a fit (`H7`, `g6`), a thread or a chamfer, a
   tolerance whose numbers cannot be read, a tolerance the style shows that the text does not write, a length
   whose unit or factor is not known -- and the value reads nothing it cannot read: a wrong nominal value is
-  worse than none. Angular dimensions have no value. New types: `DimensionValue`, `ValueSource`,
+  worse than none. A text that holds two numbers (`50-0.1`, `25 - 30`, `1 250`, `50 x 80`), a character code
+  the font defines, a fraction (`25{\S1/2;}`) or a `2x45°` chamfer gives no nominal value and no count, and
+  a tolerance written in running text (`50+0.1-0.05`) or beside a second one is named, not taken. A
+  dimension of no stated kind (its stored number may be an angle), a stored number that is not finite and a
+  length-factor override that is not a number give no length (`KindUnknown`, `MeasurementNotStored`,
+  `FactorUnknown`). Angular dimensions have no value. New types: `DimensionValue`, `ValueSource`,
   `DimensionCount`, `ToleranceRole`, `ValueUnknown`.
 - The stored measurement is the number the label shows -- the style's length factor is already in it. A drawing
   in inches whose style draws millimetres stores 3048 for points 120 apart; `length_mm` divides the factor out

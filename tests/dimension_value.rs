@@ -269,3 +269,60 @@ fn a_style_that_shows_a_tolerance_the_text_does_not_write_is_said() {
     assert_eq!(value.tolerance, None);
     assert!(value.unknown.contains(&ValueUnknown::StyleToleranceShown));
 }
+
+fn override_of(variable: u16, value: Value) -> Value {
+    serde_json::json!({ "variable": variable, "value": value })
+}
+
+/// The style a dimension sees is its own with the dimension's overrides laid
+/// over it: a tolerance the override turns on is said, one it turns off is not.
+#[test]
+fn the_tolerance_a_style_shows_is_the_one_the_dimensions_overrides_leave() {
+    let mut v = g5_json();
+    v["header"]["insunits"] = 4.into();
+    entity_at(&mut v, 299)["style_overrides"] = serde_json::json!([override_of(
+        71,
+        serde_json::json!({"type": "INTEGER", "data": 1})
+    )]);
+    let db: CadDatabase = serde_json::from_value(v.clone()).unwrap();
+    let value = value_of(&db, 299).unwrap();
+    assert!(
+        value.unknown.contains(&ValueUnknown::StyleToleranceShown),
+        "{:?}",
+        value.unknown
+    );
+
+    // The style shows one; the override turns it off.
+    v["tables"]["dim_styles"]["ISO-25"]["tolerances"] = true.into();
+    entity_at(&mut v, 299)["style_overrides"] = serde_json::json!([override_of(
+        71,
+        serde_json::json!({"type": "INTEGER", "data": 0})
+    )]);
+    let db: CadDatabase = serde_json::from_value(v).unwrap();
+    let value = value_of(&db, 299).unwrap();
+    assert!(
+        !value.unknown.contains(&ValueUnknown::StyleToleranceShown),
+        "{:?}",
+        value.unknown
+    );
+}
+
+/// A length factor the dimension overrides in a kind that is not a number is
+/// not the format's 1: the length is not known.
+#[test]
+fn an_unreadable_length_factor_override_is_not_a_factor_of_one() {
+    let mut v = g5_json();
+    v["header"]["insunits"] = 4.into();
+    entity_at(&mut v, 299)["style_overrides"] = serde_json::json!([override_of(
+        144,
+        serde_json::json!({"type": "TEXT", "data": "2"})
+    )]);
+    let db: CadDatabase = serde_json::from_value(v).unwrap();
+    let value = value_of(&db, 299).unwrap();
+    assert_eq!(value.length_mm, None);
+    assert!(
+        value.unknown.contains(&ValueUnknown::FactorUnknown),
+        "{:?}",
+        value.unknown
+    );
+}

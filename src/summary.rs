@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::model::{
     AcadTableEntity, Confidence, DimensionEntity, DimensionKind, Entity, EntityId, OrdinateAxis,
-    Ref, StyleOverride, TextOverride,
+    OverrideValue, Ref, StyleOverride, TextOverride,
 };
 use uncad_model::tables::{ExternalReference, Tables};
 use uncad_model::text::TextKind;
@@ -463,24 +463,38 @@ impl DimensionSummary {
             .map(|(style, overrides)| style.overridden(overrides));
         let text_gap = effective.as_ref().and_then(|style| style.text_gap);
         let length_factor = effective.as_ref().and_then(|style| style.length_factor);
-        let style_tolerance = d
+        let tolerance_of = |st: &uncad_model::tables::DimStyleRecord| StyleTolerance {
+            shown: st.tolerances,
+            limits: st.limits,
+            upper: st.tolerance_upper,
+            lower: st.tolerance_lower,
+            decimal_places: st.tolerance_decimal_places,
+        };
+        let own_style = d
             .style_name
             .resolved()
-            .and_then(|name| tables.dim_styles.get(name))
-            .map(|st| StyleTolerance {
-                shown: st.tolerances,
-                limits: st.limits,
-                upper: st.tolerance_upper,
-                lower: st.tolerance_lower,
-                decimal_places: st.tolerance_decimal_places,
-            });
+            .and_then(|name| tables.dim_styles.get(name));
+        // What the style states, as it states it -- the dimension's overrides
+        // are carried beside it, not laid over it.
+        let style_tolerance = own_style.map(tolerance_of);
+        // What a reading of the value needs is what is in force for this
+        // dimension: its overrides (DIMTOL, DIMLIM ...) laid over the style,
+        // the style's own when the overrides were not read.
+        let tolerance_in_force = effective.as_ref().or(own_style).map(tolerance_of);
         // A style the file writes without a DIMLFAC means the format's 1; a
         // dimension whose style is not in the table, or whose overrides were
-        // not read, has no factor known.
+        // not read, has no factor known -- nor has one whose DIMLFAC override
+        // is written in a kind that is not a number (it is not read as 1).
+        let factor_override_unreadable = d.style_overrides.as_ref().is_some_and(|overrides| {
+            overrides
+                .iter()
+                .any(|o| o.variable == 144 && !matches!(o.value, OverrideValue::Real(_)))
+        });
         let factor_in_force = effective
             .as_ref()
+            .filter(|_| !factor_override_unreadable)
             .map(|style| style.length_factor.unwrap_or(1.0));
-        let value = crate::value::read(d, factor_in_force, style_tolerance.as_ref(), to_mm);
+        let value = crate::value::read(d, factor_in_force, tolerance_in_force.as_ref(), to_mm);
         DimensionSummary {
             id: d.common.id,
             block: d.block_name.clone(),
