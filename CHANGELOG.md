@@ -9,6 +9,9 @@ bumps the minor version.
 
 ### Added
 
+- `DimensionSummary::space` names the space a dimension is drawn in, as `TextRef::space` and `TableSummary::space`
+  do (`None`, and left out of the serialized answer, when no space record lists the dimension): its points and
+  its text's middle are only places on a picture of that space.
 - `Summary::without(&[Part])` leaves a part out of a summary -- `Part::Signature` is the shape signature, the
   largest part for a drawing with many views -- and `Summary::omitted` names the parts left out, so a part
   that is not there is never read as one that is empty. A summary has none left out unless it is projected.

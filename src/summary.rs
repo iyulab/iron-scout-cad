@@ -182,6 +182,12 @@ pub struct DimensionSummary {
     /// units -- radians for an angular dimension; `None` when the file does
     /// not carry it.
     pub measurement: Option<f64>,
+    /// The space the dimension is drawn in, as [`crate::Hit::space`] names
+    /// it -- the dimension's points and [`Self::text_midpoint`] are only
+    /// places on a picture of that space. `None` when no space record lists
+    /// the dimension (a model built by hand, not read from a file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
     /// The text the dimension shows, as the model folds it: the
     /// measurement, nothing, or a literal (which may stand `<>` for the
     /// measurement inside a longer string).
@@ -440,6 +446,7 @@ impl DimensionSummary {
         DimensionSummary {
             id: d.common.id,
             block: d.block_name.clone(),
+            space: None,
             kind: d.kind,
             measurement: d.measurement,
             role: dimension_role(
@@ -816,7 +823,9 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         }
         confidence = confidence.min(e.common().confidence);
         if let Entity::Dimension(d) = e {
-            dimensions.push(DimensionSummary::of(d, &db.tables));
+            let mut summary = DimensionSummary::of(d, &db.tables);
+            summary.space = spaces.get(&d.common.id).map(|s| s.to_string());
+            dimensions.push(summary);
         }
         if let Entity::Tolerance(t) = e {
             tolerance_frames.push(ToleranceFrame {
