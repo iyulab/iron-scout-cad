@@ -9,6 +9,17 @@ bumps the minor version.
 
 ### Added
 
+- `contours(db, join_gap_um)`: which outlines of the model space close. The straight and circular pieces
+  (lines, arcs, each segment of a polyline, circles) are grouped by where their ends meet -- two ends within the
+  gap are joined -- and each group is a `Loop` (every end has one partner), `Branched` (every end has a partner
+  and some have several, as a side drawn twice) or `Open`. A group lists its entities, pieces, length in
+  millimetres and layers; an open group lists its free ends with `nearest_gap_mm`, the distance to the nearest
+  end of another piece, so a caller that wants a wider gap sees how much wider. Nothing is said about what an
+  outline is for. `None` when the drawing states no unit; blocks, ellipses and splines are not read and are
+  counted by name in `not_read`.
+- `Summary::contour_totals` (`ContourTotals`): the same at the signature's join gap in a size that does not grow
+  with the drawing -- the counts, the free ends, the lengths by layer and the length that closes.
+
 - `DimensionSummary::value` (`DimensionValue`): what a linear dimension requires, in one place instead of six.
   `nominal` is the number the drawing requires in the unit its label shows -- a number the text types
   (`Typed`), else the stored measurement (`Measured`; the text is the placeholder `<>` or says nothing about

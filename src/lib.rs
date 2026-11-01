@@ -21,6 +21,7 @@
 #![forbid(unsafe_code)]
 
 mod boundary;
+mod closure;
 mod curve;
 mod extent;
 mod geometry;
@@ -35,6 +36,7 @@ mod value;
 mod views;
 mod wl;
 
+pub use closure::{contours, Contour, ContourKind, ContourTotals, Contours, FreeEnd};
 pub use extent::{BoundedBy, Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason, TableCellHit};
 pub use relate::{

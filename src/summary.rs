@@ -713,6 +713,12 @@ pub struct Summary {
     /// Every dimension of the drawing's own spaces, by reference ID.
     #[serde(default)]
     pub dimensions: Vec<DimensionSummary>,
+    /// Which outlines of the model space close -- the counts, the lengths by
+    /// layer and the free ends, at the signature's join gap. `None` when the
+    /// drawing states no unit. The groups themselves are
+    /// [`crate::contours`]'s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contour_totals: Option<crate::closure::ContourTotals>,
     /// Every feature control frame (TOLERANCE) of the drawing's own spaces,
     /// by reference ID: its text as written and where it is. What its
     /// symbols and cells mean is not read here.
@@ -949,6 +955,8 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         labelled_texts,
         unplaced_texts,
         dimensions,
+        contour_totals: crate::closure::contours(db, crate::wl::ENDPOINT_GAP_UM)
+            .map(|c| c.totals()),
         tolerance_frames,
         tables,
         extents: crate::extent::space_extents(db),
