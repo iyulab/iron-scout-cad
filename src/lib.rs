@@ -22,6 +22,7 @@
 
 mod boundary;
 mod closure;
+mod coincident;
 mod curve;
 mod extent;
 mod geometry;
@@ -38,6 +39,9 @@ mod views;
 mod wl;
 
 pub use closure::{contours, Contour, ContourKind, ContourTotals, Contours, FreeEnd};
+pub use coincident::{
+    coincident_ends, CoincidentEnd, CoincidentEnds, NoFollow, Refusal as CoincidentRefusal,
+};
 pub use extent::{BoundedBy, Bounds, SpaceExtent};
 pub use hit_test::{hit_test, Hit, HitTest, NotSearched, NotSearchedReason, TableCellHit};
 pub use relate::{

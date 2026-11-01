@@ -49,9 +49,11 @@
 //! A line drawn as one piece and the same line drawn as two are different
 //! patterns: the signature does not merge pieces.
 
+use crate::outline::{is_sane, End, Part};
 use crate::signature::bin;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use uncad_model::model::Point2D;
 
 /// How near, in micrometres, an end of one piece must lie to an end of another
 /// for the two to be joined. A parameter of the quantization.
@@ -80,11 +82,6 @@ pub const MAX_TOTAL_PIECES: usize = 2_000_000;
 
 /// The most labels a round keeps.
 pub const MAX_KEYS: usize = 512;
-
-/// Coordinates, in millimetres, past which an end is not placed: a number
-/// that large is a sentinel or an error, and a cell index made from it would
-/// not fit.
-const MAX_COORD_MM: f64 = 1e12;
 
 /// A label longer than this many characters is replaced by its hash.
 pub const LABEL_HASH_OVER: usize = 120;
@@ -161,18 +158,6 @@ pub(crate) enum Piece {
     },
 }
 
-/// A piece's end: where it is and the direction leading from it into the
-/// piece, as a unit vector.
-struct End {
-    at: [f64; 2],
-    inward: [f64; 2],
-}
-
-fn unit(v: [f64; 2]) -> Option<[f64; 2]> {
-    let n = v[0].hypot(v[1]);
-    (n.is_finite() && n > 0.0).then(|| [v[0] / n, v[1] / n])
-}
-
 impl Piece {
     /// The node's first label, or `None` for a piece with no length.
     fn label(&self) -> Option<String> {
@@ -196,64 +181,33 @@ impl Piece {
     /// The ends of the piece that can be placed on the grid.
     fn ends(&self) -> Vec<End> {
         let mut ends = self.ends_unchecked();
-        ends.retain(|e| e.at.iter().all(|c| c.is_finite() && c.abs() < MAX_COORD_MM));
+        ends.retain(|e| is_sane(e.at));
         ends
     }
 
     fn ends_unchecked(&self) -> Vec<End> {
+        let point = |p: &[f64; 2]| Point2D { x: p[0], y: p[1] };
         match self {
-            Piece::Line { from, to } => {
-                let along = [to[0] - from[0], to[1] - from[1]];
-                match unit(along) {
-                    Some(d) => vec![
-                        End {
-                            at: *from,
-                            inward: d,
-                        },
-                        End {
-                            at: *to,
-                            inward: [-d[0], -d[1]],
-                        },
-                    ],
-                    None => Vec::new(),
-                }
+            Piece::Line { from, to } => Part::Line {
+                from: point(from),
+                to: point(to),
             }
+            .ends(),
             Piece::Arc {
                 centre,
                 u,
                 v,
                 start,
                 sweep,
-            } => {
-                let at = |t: f64| {
-                    [
-                        centre[0] + u[0] * t.cos() + v[0] * t.sin(),
-                        centre[1] + u[1] * t.cos() + v[1] * t.sin(),
-                    ]
-                };
-                // The direction the arc is travelled in at parameter `t`.
-                let along = |t: f64| {
-                    let s = sweep.signum();
-                    [
-                        s * (-u[0] * t.sin() + v[0] * t.cos()),
-                        s * (-u[1] * t.sin() + v[1] * t.cos()),
-                    ]
-                };
-                let end = start + sweep;
-                match (unit(along(*start)), unit(along(end))) {
-                    (Some(a), Some(b)) => vec![
-                        End {
-                            at: at(*start),
-                            inward: a,
-                        },
-                        End {
-                            at: at(end),
-                            inward: [-b[0], -b[1]],
-                        },
-                    ],
-                    _ => Vec::new(),
-                }
+            } => Part::Arc {
+                centre: point(centre),
+                u: point(u),
+                v: point(v),
+                start: *start,
+                sweep: *sweep,
+                radius: 0.0,
             }
+            .ends(),
             Piece::Circle { .. } => Vec::new(),
         }
     }

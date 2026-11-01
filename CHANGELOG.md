@@ -7,6 +7,18 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `coincident_ends(db, entity, anchor, join_gap_um)`: the other ends of the model space that sit within
+  the join gap of one end of a line, an arc or a polyline, each with the entity, the anchor, the field
+  path the editor writes it through (`start_point`, `end_point`, `vertices[i].point`), its position in
+  the plan and in the entity's own coordinates, and whether a straight move of the asked end can carry
+  it along. The end of an arc, and a polyline vertex that a curved segment leaves or reaches, are
+  listed with `why_not: ARC_END` and are not moved by a straight move. The reading moves nothing and
+  solves no constraint; entities it does not read (blocks, ellipses, splines, 3D polylines, tilted
+  planes, an arc whose radius is not positive, an end whose number is not finite or too large) are
+  counted in `not_read`. Ends join at the same slack `contours` uses, so the two readings agree at the gap.
+
 ### Changed
 
 - The shape signature and `contours` now read lines, circles, arcs and polylines through one
@@ -14,7 +26,10 @@ bumps the minor version.
   unchanged for drawings whose entities are well-formed. Where an entity is malformed two things
   differ: an arc with equal angles on a tilted plane is counted as `ARC_SWEEP_UNDEFINED` by
   `contours` (it was `TILTED_PLANE`), and the signature no longer adds a piece for an arc whose
-  radius is not a positive number.
+  radius is not a positive number (a circle of zero radius likewise adds no piece, which can shift the
+  piece-count overflow flags of a drawing that sits at the limit).
+- The end of a piece and the coordinate guard for placing one are computed in one place for the shape
+  signature and `contours`; results are unchanged.
 
 ## [0.15.0] - 2026-11-02
 

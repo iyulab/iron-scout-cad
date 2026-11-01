@@ -13,6 +13,29 @@ use uncad_model::bulge;
 use uncad_model::model::{Entity, Point2D};
 use uncad_model::Affine2;
 
+/// Coordinates, in millimetres, past which a piece is not placed: a number
+/// that large is a sentinel or an error, and a cell index made from it would
+/// not fit.
+pub(crate) const MAX_COORD_MM: f64 = 1e12;
+
+/// Whether a point (millimetres) is one a piece may be placed at.
+pub(crate) fn is_sane(p: [f64; 2]) -> bool {
+    p.iter().all(|c| c.is_finite() && c.abs() < MAX_COORD_MM)
+}
+
+/// A piece's end: where it is and the direction leading from it into the
+/// piece, as a unit vector.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct End {
+    pub at: [f64; 2],
+    pub inward: [f64; 2],
+}
+
+fn unit(v: [f64; 2]) -> Option<[f64; 2]> {
+    let n = v[0].hypot(v[1]);
+    (n.is_finite() && n > 0.0).then(|| [v[0] / n, v[1] / n])
+}
+
 /// One piece of an outline, in drawing units, in the world's plan.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Part {
@@ -127,6 +150,65 @@ fn images(m: &Affine2, radius: f64) -> (Point2D, Point2D) {
 }
 
 impl Part {
+    /// The two ends of a line or an arc and the direction leading from each
+    /// into the piece; nothing for a circle, or for a piece with no length
+    /// to lead along. The ends are not checked against [`MAX_COORD_MM`].
+    pub(crate) fn ends(&self) -> Vec<End> {
+        match *self {
+            Part::Line { from, to } => match unit([to.x - from.x, to.y - from.y]) {
+                Some(d) => vec![
+                    End {
+                        at: [from.x, from.y],
+                        inward: d,
+                    },
+                    End {
+                        at: [to.x, to.y],
+                        inward: [-d[0], -d[1]],
+                    },
+                ],
+                None => Vec::new(),
+            },
+            Part::Arc {
+                centre,
+                u,
+                v,
+                start,
+                sweep,
+                ..
+            } => {
+                // The direction the arc is travelled in at parameter `t`.
+                let along = |t: f64| {
+                    let s = sweep.signum();
+                    [
+                        s * (-u.x * t.sin() + v.x * t.cos()),
+                        s * (-u.y * t.sin() + v.y * t.cos()),
+                    ]
+                };
+                let end = start + sweep;
+                let at = |t: f64| {
+                    [
+                        centre.x + u.x * t.cos() + v.x * t.sin(),
+                        centre.y + u.y * t.cos() + v.y * t.sin(),
+                    ]
+                };
+                match (unit(along(start)), unit(along(end))) {
+                    (Some(a), Some(b)) => vec![
+                        End {
+                            at: at(start),
+                            inward: a,
+                        },
+                        End {
+                            at: at(end),
+                            inward: [-b[0], -b[1]],
+                        },
+                    ],
+                    _ => Vec::new(),
+                }
+            }
+            Part::Circle { .. } => Vec::new(),
+        }
+    }
+
     /// The point of an arc or circle at angle `t`.
     pub(crate) fn at(&self, t: f64) -> Option<Point2D> {
         match *self {

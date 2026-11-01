@@ -23,7 +23,7 @@
 //! is counted in [`Contours::not_read`].
 
 use crate::hit_test::spaces;
-use crate::outline::{self, Part, Why};
+use crate::outline::{self, is_sane, Part, Why};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::model::{Entity, EntityId, Point2D, Ref};
@@ -169,10 +169,6 @@ const PAIR_BUDGET: u64 = 100_000_000;
 /// The most pieces a drawing may hold for its groups to be told (the same
 /// bound the signature's pattern counts keep).
 const MAX_PIECES: usize = crate::wl::MAX_TOTAL_PIECES;
-/// Coordinates, in millimetres, past which a piece is not placed: a number
-/// that large is a sentinel or an error, and a cell index made from it would
-/// not fit.
-const MAX_COORD_MM: f64 = 1e12;
 const EPS_MM: f64 = 1e-9;
 
 struct Piece {
@@ -196,8 +192,12 @@ enum Placed {
 }
 
 fn place(entity: usize, ends: [[f64; 2]; 2], mid: [f64; 2], length_mm: f64, gap_mm: f64) -> Placed {
-    let sane = |p: [f64; 2]| p.iter().all(|c| c.is_finite() && c.abs() < MAX_COORD_MM);
-    if !(sane(ends[0]) && sane(ends[1]) && sane(mid) && length_mm.is_finite() && length_mm >= 0.0) {
+    if !(is_sane(ends[0])
+        && is_sane(ends[1])
+        && is_sane(mid)
+        && length_mm.is_finite()
+        && length_mm >= 0.0)
+    {
         return Placed::Unplaceable;
     }
     let chord = (ends[0][0] - ends[1][0]).hypot(ends[0][1] - ends[1][1]);
@@ -262,7 +262,7 @@ fn place_part(entity: usize, part: &Part, k: f64, gap_mm: f64) -> Placed {
         Part::Circle { centre, radius, .. } => {
             let at = mm(centre);
             let length = std::f64::consts::TAU * radius * k;
-            if length.is_finite() && at.iter().all(|v| v.is_finite() && v.abs() < MAX_COORD_MM) {
+            if length.is_finite() && is_sane(at) {
                 Placed::Piece(Piece {
                     entity,
                     ends: None,
