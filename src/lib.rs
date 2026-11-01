@@ -28,6 +28,7 @@ mod geometry;
 mod hit_test;
 mod limits;
 mod moments;
+mod outline;
 mod relate;
 mod select;
 mod signature;

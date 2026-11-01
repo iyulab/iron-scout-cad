@@ -23,11 +23,11 @@
 //! is counted in [`Contours::not_read`].
 
 use crate::hit_test::spaces;
+use crate::outline::{self, Part, Why};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use uncad_model::bulge;
 use uncad_model::model::{Entity, EntityId, Point2D, Ref};
-use uncad_model::{CadDatabase, Ocs};
+use uncad_model::{Affine2, CadDatabase};
 
 /// How a group of joined pieces closes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +223,59 @@ fn place(entity: usize, ends: [[f64; 2]; 2], mid: [f64; 2], length_mm: f64, gap_
     })
 }
 
+/// A part of an outline as a piece of the contour search, in millimetres.
+fn place_part(entity: usize, part: &Part, k: f64, gap_mm: f64) -> Placed {
+    let mm = |p: Point2D| [p.x * k, p.y * k];
+    match *part {
+        Part::Line { from, to } => {
+            let (a, b) = (mm(from), mm(to));
+            let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+            place(
+                entity,
+                [a, b],
+                mid,
+                (b[0] - a[0]).hypot(b[1] - a[1]),
+                gap_mm,
+            )
+        }
+        Part::Arc {
+            radius,
+            start,
+            sweep,
+            ..
+        } => {
+            let (Some(p), Some(q), Some(m)) = (
+                part.at(start),
+                part.at(start + sweep),
+                part.at(start + sweep / 2.0),
+            ) else {
+                return Placed::Unplaceable;
+            };
+            place(
+                entity,
+                [mm(p), mm(q)],
+                mm(m),
+                radius * sweep.abs() * k,
+                gap_mm,
+            )
+        }
+        Part::Circle { centre, radius, .. } => {
+            let at = mm(centre);
+            let length = std::f64::consts::TAU * radius * k;
+            if length.is_finite() && at.iter().all(|v| v.is_finite() && v.abs() < MAX_COORD_MM) {
+                Placed::Piece(Piece {
+                    entity,
+                    ends: None,
+                    mid: at,
+                    length_mm: length,
+                })
+            } else {
+                Placed::Unplaceable
+            }
+        }
+    }
+}
+
 /// Where an end stands with the ends of other pieces within the gap.
 #[derive(Clone, Copy, PartialEq)]
 enum Partners {
@@ -298,107 +351,21 @@ fn contours_within(
         let mut mine: Vec<Piece> = Vec::new();
         let owner = owners.len();
         match e {
-            Entity::Line(l) => {
-                let from = [l.start_point.x * k, l.start_point.y * k];
-                let to = [l.end_point.x * k, l.end_point.y * k];
-                let mid = [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0];
-                let length = (to[0] - from[0]).hypot(to[1] - from[1]);
-                keep(
-                    place(owner, [from, to], mid, length, gap_mm),
-                    &mut mine,
-                    &mut not_read,
-                );
-            }
-            Entity::Circle(c) => match Ocs::of(c.extrusion).and_then(|o| o.flat_map()) {
-                Some(plan) => {
-                    let length = std::f64::consts::TAU * c.radius * k;
-                    let ctr = plan.apply(Point2D {
-                        x: c.center.x,
-                        y: c.center.y,
-                    });
-                    let at = [ctr.x * k, ctr.y * k];
-                    if c.radius.is_finite()
-                        && c.radius > 0.0
-                        && length.is_finite()
-                        && at.iter().all(|v| v.is_finite() && v.abs() < MAX_COORD_MM)
-                    {
-                        mine.push(Piece {
-                            entity: owner,
-                            ends: None,
-                            mid: at,
-                            length_mm: length,
-                        });
-                    } else {
-                        skip("UNPLACEABLE", &mut not_read);
+            Entity::Line(_)
+            | Entity::Circle(_)
+            | Entity::Arc(_)
+            | Entity::LwPolyline(_)
+            | Entity::Polyline2D(_) => match outline::parts(e, &Affine2::IDENTITY) {
+                Ok(parts) => {
+                    for part in &parts {
+                        keep(place_part(owner, part, k, gap_mm), &mut mine, &mut not_read);
                     }
                 }
-                None => skip("TILTED_PLANE", &mut not_read),
-            },
-            Entity::Arc(a) => match (Ocs::of(a.extrusion).and_then(|o| o.flat_map()), a.sweep()) {
-                (Some(plan), Some(sweep)) => {
-                    let at = |t: f64| {
-                        plan.apply(Point2D {
-                            x: a.center.x + a.radius * t.cos(),
-                            y: a.center.y + a.radius * t.sin(),
-                        })
-                    };
-                    let (p, q, m) = (
-                        at(a.start_angle),
-                        at(a.start_angle + sweep),
-                        at(a.start_angle + sweep / 2.0),
-                    );
-                    let length = a.radius * sweep.abs() * k;
-                    let placed = if a.radius.is_finite() && a.radius > 0.0 {
-                        place(
-                            owner,
-                            [[p.x * k, p.y * k], [q.x * k, q.y * k]],
-                            [m.x * k, m.y * k],
-                            length,
-                            gap_mm,
-                        )
-                    } else {
-                        Placed::Unplaceable
-                    };
-                    keep(placed, &mut mine, &mut not_read);
-                }
-                (None, _) => skip("TILTED_PLANE", &mut not_read),
+                Err(Why::Tilted) => skip("TILTED_PLANE", &mut not_read),
                 // An arc with equal angles has no ends to join.
-                (_, None) => skip("ARC_SWEEP_UNDEFINED", &mut not_read),
+                Err(Why::SweepUndefined) => skip("ARC_SWEEP_UNDEFINED", &mut not_read),
+                Err(Why::BadRadius) => skip("UNPLACEABLE", &mut not_read),
             },
-            Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-                match Ocs::of(p.extrusion).and_then(|o| o.flat_map()) {
-                    Some(plan) => {
-                        for s in bulge::segments(&p.vertices, p.closed) {
-                            let (from, to) = (plan.apply(s.from), plan.apply(s.to));
-                            let (length, mid) = match s.arc {
-                                Some(arc) => (
-                                    arc.radius * arc.sweep.abs(),
-                                    plan.apply(arc.at(arc.start_angle + arc.sweep / 2.0)),
-                                ),
-                                None => (
-                                    (s.to.x - s.from.x).hypot(s.to.y - s.from.y),
-                                    Point2D {
-                                        x: (from.x + to.x) / 2.0,
-                                        y: (from.y + to.y) / 2.0,
-                                    },
-                                ),
-                            };
-                            keep(
-                                place(
-                                    owner,
-                                    [[from.x * k, from.y * k], [to.x * k, to.y * k]],
-                                    [mid.x * k, mid.y * k],
-                                    length * k,
-                                    gap_mm,
-                                ),
-                                &mut mine,
-                                &mut not_read,
-                            );
-                        }
-                    }
-                    None => skip("TILTED_PLANE", &mut not_read),
-                }
-            }
             Entity::Polyline3D(_) => skip("POLYLINE_3D", &mut not_read),
             Entity::Insert(_) => skip("INSERT", &mut not_read),
             Entity::Ellipse(_) => skip("ELLIPSE", &mut not_read),

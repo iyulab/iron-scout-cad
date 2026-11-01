@@ -7,6 +7,15 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Changed
+
+- The shape signature and `contours` now read lines, circles, arcs and polylines through one
+  extraction of the pieces they draw, where each used to read the entities itself. Results are
+  unchanged for drawings whose entities are well-formed. Where an entity is malformed two things
+  differ: an arc with equal angles on a tilted plane is counted as `ARC_SWEEP_UNDEFINED` by
+  `contours` (it was `TILTED_PLANE`), and the signature no longer adds a piece for an arc whose
+  radius is not a positive number.
+
 ## [0.15.0] - 2026-11-02
 
 ### Added

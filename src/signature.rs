@@ -49,10 +49,10 @@ use uncad_model::model::{DimensionKind, Entity, InsertEntity};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, Ocs, Point2D, Point3D};
 
-use crate::extent::{linear, Reach};
-use crate::geometry::{in_plane, xy};
+use crate::extent::Reach;
 use crate::limits::{NotEntered, Walk};
 use crate::moments::Moments;
+use crate::outline::{self, Part, Why};
 use crate::summary::DimensionSummary;
 use crate::views::{self, Item, Rect, SheetMatch, View, VIEW_GAP_UM};
 use crate::wl::{Piece, WlParams, MAX_NODES, MAX_TOTAL_PIECES};
@@ -407,45 +407,83 @@ impl Counter<'_> {
         bump(&mut self.item.entities, name);
     }
 
-    /// Adds a straight piece, its ends in the world's plan in drawing
-    /// units, to the outline of the top-level entity being walked.
-    fn outline_line(&mut self, from: Point2D, to: Point2D) {
-        let Some(k) = self.to_mm else { return };
-        self.piece(Piece::Line {
-            from: [from.x * k, from.y * k],
-            to: [to.x * k, to.y * k],
-        });
-        let o = self.item.origin;
-        self.item.moments.segment(
-            [from.x * k - o[0], from.y * k - o[1]],
-            [to.x * k - o[0], to.y * k - o[1]],
-        );
+    /// Adds the pieces `e` draws to the outline of the top-level entity being
+    /// walked, placed in the world's plan by `at`. An entity that cannot be
+    /// placed is counted (`OUTLINE_UNPLACED`); a circle on such a plane is
+    /// not a circle there and is left out silently, as is an arc with no sweep.
+    fn outline(&mut self, e: &Entity, at: &Transform) {
+        let Some(t) = at.place else {
+            self.unplaced(e);
+            return;
+        };
+        match outline::parts(e, &t) {
+            Ok(parts) => {
+                for part in parts {
+                    self.add_part(part, at);
+                }
+            }
+            Err(Why::Tilted) => self.unplaced(e),
+            Err(Why::SweepUndefined | Why::BadRadius) => {}
+        }
     }
 
-    /// Adds an arc of `radius` about `center`, both in the coordinates `m`
-    /// takes to the world's plan, from `start` through `sweep` there. `m` is
-    /// a similarity (the caller has checked the scale is the same on every
-    /// axis), so the arc stays circular.
-    fn outline_arc(&mut self, m: &Affine2, center: Point2D, radius: f64, start: f64, sweep: f64) {
+    fn unplaced(&mut self, e: &Entity) {
+        match e {
+            Entity::Circle(_) => {}
+            Entity::Arc(a) if a.sweep().is_none() => {}
+            _ => bump(&mut self.not_measured, "OUTLINE_UNPLACED"),
+        }
+    }
+
+    /// Adds one piece, its coordinates in the world's plan in drawing units.
+    /// A curve is only a piece under a scale that is the same on every axis.
+    fn add_part(&mut self, part: Part, at: &Transform) {
         let Some(k) = self.to_mm else { return };
         let o = self.item.origin;
-        let c = m.apply(center);
-        let u = linear(m, Point2D { x: radius, y: 0.0 });
-        let v = linear(m, Point2D { x: 0.0, y: radius });
-        self.piece(Piece::Arc {
-            centre: [c.x * k, c.y * k],
-            u: [u.x * k, u.y * k],
-            v: [v.x * k, v.y * k],
-            start,
-            sweep,
-        });
-        self.item.moments.arc(
-            [c.x * k - o[0], c.y * k - o[1]],
-            [u.x * k, u.y * k],
-            [v.x * k, v.y * k],
-            start,
-            sweep,
-        );
+        match part {
+            Part::Line { from, to } => {
+                self.piece(Piece::Line {
+                    from: [from.x * k, from.y * k],
+                    to: [to.x * k, to.y * k],
+                });
+                self.item.moments.segment(
+                    [from.x * k - o[0], from.y * k - o[1]],
+                    [to.x * k - o[0], to.y * k - o[1]],
+                );
+            }
+            Part::Arc {
+                centre,
+                u,
+                v,
+                start,
+                sweep,
+                ..
+            } => {
+                if at.uniform.is_none() {
+                    return;
+                }
+                self.piece(Piece::Arc {
+                    centre: [centre.x * k, centre.y * k],
+                    u: [u.x * k, u.y * k],
+                    v: [v.x * k, v.y * k],
+                    start,
+                    sweep,
+                });
+                self.item.moments.arc(
+                    [centre.x * k - o[0], centre.y * k - o[1]],
+                    [u.x * k, u.y * k],
+                    [v.x * k, v.y * k],
+                    start,
+                    sweep,
+                );
+            }
+            Part::Circle { radius, .. } => {
+                let Some(factor) = at.uniform else { return };
+                if let Some(um) = self.micrometres(2.0 * radius * factor) {
+                    self.piece(Piece::Circle { diameter_um: um });
+                }
+            }
+        }
     }
 
     /// Adds a piece to the top-level entity being walked, as a node of layer
@@ -480,12 +518,7 @@ impl Counter<'_> {
                 self.note("LINE");
                 let v = sub(l.end_point, l.start_point);
                 self.line(norm(at.apply(v)));
-                match at.place {
-                    Some(t) => {
-                        self.outline_line(t.apply(xy(l.start_point)), t.apply(xy(l.end_point)))
-                    }
-                    None => bump(&mut self.not_measured, "OUTLINE_UNPLACED"),
-                }
+                self.outline(e, at);
             }
             Entity::Circle(c) => {
                 self.note("CIRCLE");
@@ -494,9 +527,7 @@ impl Counter<'_> {
                         if let Some(um) = self.micrometres(2.0 * c.radius * u) {
                             // A circle on a plane that cannot be mapped to the
                             // world's plan is not a circle there: no piece.
-                            if at.place.and_then(|t| in_plane(c.extrusion, &t)).is_some() {
-                                self.piece(Piece::Circle { diameter_um: um });
-                            }
+                            self.outline(e, at);
                             *self.diameters.entry(um).or_insert(0) += 1;
                             *self.item.diameters.entry(um).or_insert(0) += 1;
                         }
@@ -509,15 +540,8 @@ impl Counter<'_> {
                 match at.uniform {
                     Some(u) => {
                         self.arc(a.radius * u);
-                        let m = at.place.and_then(|t| in_plane(a.extrusion, &t));
-                        match (m, a.sweep()) {
-                            (Some(m), Some(sweep)) => {
-                                self.outline_arc(&m, xy(a.center), a.radius, a.start_angle, sweep)
-                            }
-                            (None, Some(_)) => bump(&mut self.not_measured, "OUTLINE_UNPLACED"),
-                            // An arc with equal angles has no sweep to weigh.
-                            (_, None) => {}
-                        }
+                        // An arc with equal angles has no sweep to weigh.
+                        self.outline(e, at);
                     }
                     None => bump(&mut self.not_measured, "ARC_NON_UNIFORM_SCALE"),
                 }
@@ -529,12 +553,7 @@ impl Counter<'_> {
                     return;
                 };
                 let in_plane = |v: Point2D| add(scale(ocs.x_axis(), v.x), scale(ocs.y_axis(), v.y));
-                let placed = at
-                    .place
-                    .and_then(|t| crate::geometry::in_plane(p.extrusion, &t));
-                if placed.is_none() {
-                    bump(&mut self.not_measured, "OUTLINE_UNPLACED");
-                }
+                self.outline(e, at);
                 for segment in uncad_model::bulge::segments(&p.vertices, p.closed) {
                     match segment.arc {
                         None => {
@@ -544,24 +563,12 @@ impl Counter<'_> {
                                 y: segment.to.y - segment.from.y,
                             };
                             self.line(norm(at.apply(in_plane(v))));
-                            if let Some(m) = placed {
-                                self.outline_line(m.apply(segment.from), m.apply(segment.to));
-                            }
                         }
                         Some(arc) => {
                             self.note("POLYLINE_ARC_SEGMENT");
                             match at.uniform {
                                 Some(u) => {
                                     self.arc(arc.radius * u);
-                                    if let Some(m) = placed {
-                                        self.outline_arc(
-                                            &m,
-                                            arc.center,
-                                            arc.radius,
-                                            arc.start_angle,
-                                            arc.sweep,
-                                        );
-                                    }
                                 }
                                 None => bump(
                                     &mut self.not_measured,
