@@ -9,6 +9,22 @@ bumps the minor version.
 
 ### Added
 
+- `DimensionSummary::value` (`DimensionValue`): what a linear dimension requires, in one place instead of six.
+  `nominal` is the number the drawing requires in the unit its label shows -- a number the text types
+  (`Typed`), else the stored measurement (`Measured`; the text is the placeholder `<>` or says nothing about
+  the value); `length_mm` is the length the dimension measures in millimetres, from the stored measurement,
+  the style's length factor and the drawing's unit; `count` is a count written in front (`4X `, `4-`, `3X `;
+  at least 2); `tolerance` is what a tolerance written in the text is, by where it stands -- `Limits` (a stack
+  that is the whole text), `Deviation` (a stack after the value), `Symmetric` (`±` after the value or `<>`).
+  What is not turned into a field is named in `unknown` -- a fit (`H7`, `g6`), a thread or a chamfer, a
+  tolerance whose numbers cannot be read, a tolerance the style shows that the text does not write, a length
+  whose unit or factor is not known -- and the value reads nothing it cannot read: a wrong nominal value is
+  worse than none. Angular dimensions have no value. New types: `DimensionValue`, `ValueSource`,
+  `DimensionCount`, `ToleranceRole`, `ValueUnknown`.
+- The stored measurement is the number the label shows -- the style's length factor is already in it. A drawing
+  in inches whose style draws millimetres stores 3048 for points 120 apart; `length_mm` divides the factor out
+  before applying the unit, so `3048` under a factor of 25.4 and `3.048` under 0.0254 are the same length.
+
 - `DimensionSummary::ordinate_axis` (the coordinate an ordinate dimension measures from its datum) and
   `DimensionSummary::rotation` (the angle a rotated linear dimension is measured along, radians) carry what the
   model holds, so a listing no longer needs the detailed view to tell an x ordinate from a y one. Each is absent

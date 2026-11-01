@@ -178,9 +178,11 @@ pub struct DimensionSummary {
     pub block: Ref<String>,
     /// What the dimension measures; `None` when the file does not state it.
     pub kind: Option<DimensionKind>,
-    /// The measurement the drawing recorded (DXF 42), in the drawing's
-    /// units -- radians for an angular dimension; `None` when the file does
-    /// not carry it.
+    /// The measurement the drawing recorded (DXF 42): the number the
+    /// dimension's label shows, so the style's length factor is already in
+    /// it -- radians for an angular dimension; `None` when the file does
+    /// not carry it. The length the dimension measures in the drawing's
+    /// units is this divided by [`Self::length_factor`].
     pub measurement: Option<f64>,
     /// The space the dimension is drawn in, as [`crate::Hit::space`] names
     /// it -- the dimension's points and [`Self::text_midpoint`] are only
@@ -250,6 +252,12 @@ pub struct DimensionSummary {
     /// not known: nothing is guessed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<DimensionRole>,
+    /// The value the dimension requires, read from its text and measurement
+    /// -- the nominal number and where it came from, the length it measures
+    /// in millimetres, a count and a tolerance written in the text, and what
+    /// was not read. `None` for an angular dimension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<crate::value::DimensionValue>,
     pub confidence: Confidence,
 }
 
@@ -419,7 +427,7 @@ impl TableSummary {
 const TOLERANCE_VARIABLES: [u16; 5] = [71, 72, 47, 48, 272];
 
 impl DimensionSummary {
-    pub(crate) fn of(d: &DimensionEntity, tables: &Tables) -> Self {
+    pub(crate) fn of(d: &DimensionEntity, tables: &Tables, to_mm: Option<f64>) -> Self {
         use uncad_model::text::{tokens, Token};
         let literal = match &d.text_override {
             TextOverride::Literal(text) => Some(text.as_str()),
@@ -454,6 +462,25 @@ impl DimensionSummary {
             .zip(d.style_overrides.as_ref())
             .map(|(style, overrides)| style.overridden(overrides));
         let text_gap = effective.as_ref().and_then(|style| style.text_gap);
+        let length_factor = effective.as_ref().and_then(|style| style.length_factor);
+        let style_tolerance = d
+            .style_name
+            .resolved()
+            .and_then(|name| tables.dim_styles.get(name))
+            .map(|st| StyleTolerance {
+                shown: st.tolerances,
+                limits: st.limits,
+                upper: st.tolerance_upper,
+                lower: st.tolerance_lower,
+                decimal_places: st.tolerance_decimal_places,
+            });
+        // A style the file writes without a DIMLFAC means the format's 1; a
+        // dimension whose style is not in the table, or whose overrides were
+        // not read, has no factor known.
+        let factor_in_force = effective
+            .as_ref()
+            .map(|style| style.length_factor.unwrap_or(1.0));
+        let value = crate::value::read(d, factor_in_force, style_tolerance.as_ref(), to_mm);
         DimensionSummary {
             id: d.common.id,
             block: d.block_name.clone(),
@@ -472,17 +499,7 @@ impl DimensionSummary {
             text: d.text_override.clone(),
             text_midpoint: d.text_midpoint,
             style: d.style_name.clone(),
-            style_tolerance: d
-                .style_name
-                .resolved()
-                .and_then(|name| tables.dim_styles.get(name))
-                .map(|st| StyleTolerance {
-                    shown: st.tolerances,
-                    limits: st.limits,
-                    upper: st.tolerance_upper,
-                    lower: st.tolerance_lower,
-                    decimal_places: st.tolerance_decimal_places,
-                }),
+            style_tolerance,
             tolerance_overrides: d.style_overrides.as_ref().map(|all| {
                 all.iter()
                     .filter(|o| TOLERANCE_VARIABLES.contains(&o.variable))
@@ -490,7 +507,8 @@ impl DimensionSummary {
                     .collect()
             }),
             text_stacks,
-            length_factor: effective.as_ref().and_then(|style| style.length_factor),
+            length_factor,
+            value,
             confidence: d.common.confidence,
         }
     }
@@ -828,6 +846,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
     let mut tolerance_frames = Vec::new();
     let mut tables = Vec::new();
     let spaces = crate::hit_test::spaces(db);
+    let to_mm = db.header.units().and_then(|u| u.to_mm);
 
     for e in &db.entities {
         *by_type.entry(e.type_name().to_string()).or_insert(0) += 1;
@@ -836,7 +855,7 @@ pub fn summarize(db: &CadDatabase) -> Summary {
         }
         confidence = confidence.min(e.common().confidence);
         if let Entity::Dimension(d) = e {
-            let mut summary = DimensionSummary::of(d, &db.tables);
+            let mut summary = DimensionSummary::of(d, &db.tables, to_mm);
             summary.space = spaces.get(&d.common.id).map(|s| s.to_string());
             dimensions.push(summary);
         }

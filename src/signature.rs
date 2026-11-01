@@ -577,7 +577,7 @@ impl Counter<'_> {
             }
             Entity::Insert(i) => self.insert(i, at),
             Entity::Dimension(d) => {
-                let summary = DimensionSummary::of(d, self.tables);
+                let summary = DimensionSummary::of(d, self.tables, self.to_mm);
                 bump(&mut self.dimensions, kind_name(summary.kind));
                 let style = summary
                     .style_tolerance

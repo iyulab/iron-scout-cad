@@ -31,6 +31,7 @@ mod relate;
 mod select;
 mod signature;
 mod summary;
+mod value;
 mod views;
 mod wl;
 
@@ -48,6 +49,7 @@ pub use summary::{
     Part, StyleTolerance, Summary, TableCells, TableSummary, TextRef, TextStack, ToleranceFrame,
     UnresolvedInsert,
 };
+pub use value::{DimensionCount, DimensionValue, ToleranceRole, ValueSource, ValueUnknown};
 pub use views::{SheetFit, SheetMatch, View, MAX_ITEMS, MAX_VIEWS, VIEW_GAP_UM};
 pub use wl::{
     PatternCounts, WlParams, ANGLE_TOLERANCE_DEG, ENDPOINT_GAP_UM, LABEL_HASH_OVER, MAX_EDGES,
