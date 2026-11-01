@@ -15,8 +15,15 @@ bumps the minor version.
   and some have several, as a side drawn twice) or `Open`. A group lists its entities, pieces, length in
   millimetres and layers; an open group lists its free ends with `nearest_gap_mm`, the distance to the nearest
   end of another piece, so a caller that wants a wider gap sees how much wider. Nothing is said about what an
-  outline is for. `None` when the drawing states no unit; blocks, ellipses and splines are not read and are
-  counted by name in `not_read`.
+  outline is for. `None` when the drawing states no unit; blocks, ellipses, splines and 3D polylines are not
+  read and are counted by name in `not_read`. An arc whose own ends meet (drawn from 0 to 360 degrees) closes
+  on itself as a circle does; a piece shorter than the gap whose ends meet (a repeated vertex) is left out and
+  counted (`DEGENERATE`); two pieces drawn on top of each other are a side drawn twice (`Branched`), not a
+  loop. Each group's length is also given by layer (`length_mm_by_layer`), and the totals add the pieces of
+  each layer. A piece with a coordinate that is not finite or is too large, or a radius that is not positive,
+  is counted (`UNPLACEABLE`). The answer does not depend on the order the file lists its entities in. Past a
+  bound on pieces or on ends crowded at one point no group is told and `not_read` says so (`PIECE_LIMIT`,
+  `PARTNER_BUDGET`).
 - `Summary::contour_totals` (`ContourTotals`): the same at the signature's join gap in a size that does not grow
   with the drawing -- the counts, the free ends, the lengths by layer and the length that closes.
 

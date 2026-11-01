@@ -157,3 +157,241 @@ fn what_is_not_read_is_counted_by_name() {
     let c = contours(&g1, JOIN_UM).unwrap();
     assert_eq!(c.not_read.get("INSERT"), Some(&1));
 }
+
+// ---- what an independent read of the grouping drew from degenerate drawings ----
+
+use serde_json::{json, Value};
+
+const TAU: f64 = std::f64::consts::TAU;
+
+/// G26's header with `entities` in place of its drawing.
+fn drawing(entities: Vec<Value>) -> CadDatabase {
+    let mut v: Value = serde_json::from_str(include_str!("golden/g26.expected.json")).unwrap();
+    v["entities"] = entities.into();
+    serde_json::from_value(v).unwrap()
+}
+
+fn common(id: u64, layer: &str) -> Value {
+    let v: Value = serde_json::from_str(include_str!("golden/g26.expected.json")).unwrap();
+    let mut c = v["entities"][0]["common"].clone();
+    c["id"] = id.into();
+    c["layer"] = json!({"type": "RESOLVED", "data": layer});
+    c
+}
+
+fn line(id: u64, layer: &str, from: [f64; 2], to: [f64; 2]) -> Value {
+    json!({
+        "type": "LINE", "common": common(id, layer),
+        "start_point": {"x": from[0], "y": from[1], "z": 0.0},
+        "end_point": {"x": to[0], "y": to[1], "z": 0.0},
+    })
+}
+
+fn arc(id: u64, centre: [f64; 2], r: f64, from: f64, to: f64) -> Value {
+    json!({
+        "type": "ARC", "common": common(id, "CUT"),
+        "center": {"x": centre[0], "y": centre[1], "z": 0.0}, "radius": r,
+        "start_angle": from, "end_angle": to,
+        "extrusion": {"x": 0.0, "y": 0.0, "z": 1.0},
+    })
+}
+
+fn circle(id: u64, centre: [f64; 2], r: f64) -> Value {
+    json!({
+        "type": "CIRCLE", "common": common(id, "CUT"),
+        "center": {"x": centre[0], "y": centre[1], "z": 0.0}, "radius": r,
+        "extrusion": {"x": 0.0, "y": 0.0, "z": 1.0},
+    })
+}
+
+fn polyline(id: u64, vertices: &[[f64; 2]], closed: bool) -> Value {
+    json!({
+        "type": "LWPOLYLINE", "common": common(id, "CUT"),
+        "vertices": vertices.iter().map(|p| json!({
+            "point": {"x": p[0], "y": p[1]}, "bulge": 0.0, "start_width": 0.0, "end_width": 0.0,
+        })).collect::<Vec<_>>(),
+        "closed": closed, "const_width": 0.0, "elevation": 0.0,
+        "extrusion": {"x": 0.0, "y": 0.0, "z": 1.0},
+    })
+}
+
+fn counts(c: &Contours) -> (u32, u32, u32) {
+    (c.loops, c.branched, c.open)
+}
+
+/// An arc drawn from 0 to 360 degrees, or from 0 to just under it, has its ends
+/// where they started: it closes on itself the way a circle does.
+#[test]
+fn an_arc_whose_ends_meet_closes_on_itself() {
+    for end in [TAU, TAU - 0.0005] {
+        let c = contours(&drawing(vec![arc(1, [0.0, 0.0], 10.0, 0.0, end)]), JOIN_UM).unwrap();
+        assert_eq!(counts(&c), (1, 0, 0), "to {end}");
+        assert_eq!(c.components[0].pieces, 1);
+        assert!(c.components[0].free_ends.is_empty());
+        assert!(c.not_read.is_empty(), "{:?}", c.not_read);
+    }
+}
+
+/// A repeated vertex is a piece with no length: it neither opens nor branches
+/// the outline it sits in, and is counted.
+#[test]
+fn a_repeated_vertex_leaves_the_square_a_loop() {
+    let square = [
+        [0.0, 0.0],
+        [10.0, 0.0],
+        [10.0, 0.0],
+        [10.0, 10.0],
+        [0.0, 10.0],
+    ];
+    let c = contours(&drawing(vec![polyline(1, &square, true)]), JOIN_UM).unwrap();
+    assert_eq!(counts(&c), (1, 0, 0), "{:?}", c.components);
+    assert_eq!(c.components[0].pieces, 4);
+    assert!(close(c.components[0].length_mm, 40.0));
+    assert_eq!(c.not_read.get("DEGENERATE"), Some(&1));
+    // A line of no length drawn on its own is only counted.
+    let c = contours(
+        &drawing(vec![line(2, "CUT", [5.0, 5.0], [5.0, 5.0])]),
+        JOIN_UM,
+    )
+    .unwrap();
+    assert_eq!((counts(&c), c.components.len()), ((0, 0, 0), 0));
+    assert_eq!(c.not_read.get("DEGENERATE"), Some(&1));
+}
+
+/// Two pieces drawn on top of each other enclose nothing; two that meet at both
+/// ends and are not the same curve do.
+#[test]
+fn two_pieces_on_top_of_each_other_are_a_side_drawn_twice_and_two_halves_a_circle() {
+    let twice = [
+        line(1, "CUT", [0.0, 0.0], [10.0, 0.0]),
+        line(2, "CUT", [10.0, 0.0], [0.0, 0.0]),
+    ];
+    let c = contours(&drawing(twice.to_vec()), JOIN_UM).unwrap();
+    assert_eq!(counts(&c), (0, 1, 0));
+    let same_arc = [
+        arc(1, [0.0, 0.0], 10.0, 0.0, std::f64::consts::PI),
+        arc(2, [0.0, 0.0], 10.0, 0.0, std::f64::consts::PI),
+    ];
+    let c = contours(&drawing(same_arc.to_vec()), JOIN_UM).unwrap();
+    assert_eq!(counts(&c), (0, 1, 0));
+    let halves = [
+        arc(1, [0.0, 0.0], 10.0, 0.0, std::f64::consts::PI),
+        arc(2, [0.0, 0.0], 10.0, std::f64::consts::PI, TAU),
+    ];
+    let c = contours(&drawing(halves.to_vec()), JOIN_UM).unwrap();
+    assert_eq!(counts(&c), (1, 0, 0));
+    assert_eq!(c.components[0].pieces, 2);
+}
+
+/// A number that is not a coordinate is not placed -- not a panic, not a length
+/// that is not a number, and not silently gone.
+#[test]
+fn a_piece_that_cannot_be_placed_is_counted_and_adds_no_length() {
+    let mut db = drawing(vec![
+        line(1, "CUT", [0.0, 0.0], [10.0, 0.0]),
+        line(2, "CUT", [0.0, 0.0], [1e300, 0.0]),
+        line(3, "CUT", [0.0, 5.0], [10.0, 5.0]),
+        circle(4, [0.0, 0.0], -5.0),
+        circle(5, [0.0, 0.0], 0.0),
+    ]);
+    if let uncad_model::model::Entity::Line(l) = &mut db.entities[2] {
+        l.start_point.x = f64::NAN;
+    }
+    for gap in [0, JOIN_UM, 1_000] {
+        let c = contours(&db, gap).unwrap();
+        assert_eq!(c.not_read.get("UNPLACEABLE"), Some(&4), "gap {gap}");
+        assert!(
+            c.components.iter().all(|g| g.length_mm.is_finite()),
+            "{:?}",
+            c.components
+        );
+        let total: f64 = c.components.iter().map(|g| g.length_mm).sum();
+        assert!(close(total, 10.0), "{total}");
+    }
+}
+
+/// A gap of nothing and a coordinate at the edge of what is placed do not
+/// overflow the grid.
+#[test]
+fn a_gap_of_nothing_and_far_coordinates_do_not_overflow() {
+    let db = drawing(vec![
+        line(1, "CUT", [9e11, 9e11], [9e11 + 1.0, 9e11]),
+        line(2, "CUT", [9e11 + 1.0, 9e11], [9e11 + 1.0, 9e11 + 1.0]),
+        line(3, "CUT", [-9e11, -9e11], [0.0, 0.0]),
+    ]);
+    for gap in [0, 1] {
+        let c = contours(&db, gap).unwrap();
+        assert_eq!(counts(&c), (0, 0, 2), "gap {gap}");
+    }
+}
+
+/// A drawing of one open line has ends and no other end: it names no budget.
+#[test]
+fn a_line_with_nothing_near_names_no_nearest_distance_and_no_budget() {
+    let c = contours(
+        &drawing(vec![line(1, "CUT", [0.0, 0.0], [10.0, 0.0])]),
+        JOIN_UM,
+    )
+    .unwrap();
+    assert_eq!(counts(&c), (0, 0, 1));
+    assert_eq!(c.components[0].free_ends.len(), 2);
+    assert!(c.components[0]
+        .free_ends
+        .iter()
+        .all(|e| e.nearest_gap_mm.is_none()));
+    assert!(c.not_read.is_empty(), "{:?}", c.not_read);
+}
+
+/// An arc with equal angles has no ends to join: it is counted, not dropped.
+#[test]
+fn an_arc_with_equal_angles_is_counted() {
+    let c = contours(&drawing(vec![arc(1, [0.0, 0.0], 10.0, 1.0, 1.0)]), JOIN_UM).unwrap();
+    assert!(c.components.is_empty());
+    assert_eq!(c.not_read.get("ARC_SWEEP_UNDEFINED"), Some(&1));
+}
+
+/// The answer is a property of the drawing, not of the order the file lists it
+/// in: G26 listed reversed and shuffled reads to the same groups, lengths and
+/// free ends.
+#[test]
+fn the_order_the_file_lists_the_entities_in_does_not_change_the_answer() {
+    let original = g26();
+    let expected = contours(&original, JOIN_UM).unwrap();
+    let mut reversed = original.clone();
+    reversed.entities.reverse();
+    assert_eq!(contours(&reversed, JOIN_UM).unwrap(), expected);
+    // A fixed shuffle: every third entity first, then the rest.
+    let mut shuffled = original.clone();
+    let n = shuffled.entities.len();
+    shuffled.entities = (0..3)
+        .flat_map(|r| (0..n).filter(move |i| i % 3 == r))
+        .map(|i| original.entities[i].clone())
+        .collect();
+    assert_eq!(contours(&shuffled, JOIN_UM).unwrap(), expected);
+    for gap in [10, 1_000, 2_500] {
+        assert_eq!(
+            contours(&reversed, gap).unwrap(),
+            contours(&original, gap).unwrap(),
+            "gap {gap}"
+        );
+    }
+}
+
+/// A group that spans layers says how much of its length each one holds, and the
+/// layers' totals add up to the pieces.
+#[test]
+fn a_group_that_spans_layers_splits_its_length_by_layer() {
+    let db = drawing(vec![
+        line(1, "CUT", [0.0, 0.0], [10.0, 0.0]),
+        line(2, "BEND", [10.0, 0.0], [10.0, 4.0]),
+    ]);
+    let c = contours(&db, JOIN_UM).unwrap();
+    assert_eq!(c.components.len(), 1);
+    let g = &c.components[0];
+    assert!(close(g.length_mm, 14.0));
+    assert!(close(g.length_mm_by_layer["CUT"], 10.0));
+    assert!(close(g.length_mm_by_layer["BEND"], 4.0));
+    let t = c.totals();
+    assert!(close(t.length_mm_by_layer["CUT"], 10.0));
+    assert!(close(t.length_mm_by_layer["BEND"], 4.0));
+}
