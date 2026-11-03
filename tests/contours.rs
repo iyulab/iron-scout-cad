@@ -258,6 +258,28 @@ fn a_repeated_vertex_leaves_the_square_a_loop() {
     assert_eq!(c.not_read.get("DEGENERATE"), Some(&1));
 }
 
+/// Grouping follows ends, not crossings: a closed polyline whose two diagonals
+/// cross at a point that is no vertex is one loop of four pieces (the crossing
+/// joins nothing), and the same vertices left open are one open group with two
+/// free ends. Nothing is said about an area, which a crossing outline has no
+/// single value for.
+#[test]
+fn a_polyline_that_crosses_itself_is_grouped_by_its_ends_not_its_crossing() {
+    let bow_tie = [[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 10.0]];
+    let diagonal = 10.0 * std::f64::consts::SQRT_2;
+    let closed = contours(&drawing(vec![polyline(1, &bow_tie, true)]), JOIN_UM).unwrap();
+    assert_eq!(counts(&closed), (1, 0, 0), "{:?}", closed.components);
+    assert_eq!(closed.components[0].pieces, 4);
+    assert!(close(closed.components[0].length_mm, 2.0 * diagonal + 20.0));
+    assert!(closed.components[0].free_ends.is_empty());
+
+    let open = contours(&drawing(vec![polyline(2, &bow_tie, false)]), JOIN_UM).unwrap();
+    assert_eq!(counts(&open), (0, 0, 1), "{:?}", open.components);
+    assert_eq!(open.components[0].pieces, 3);
+    assert!(close(open.components[0].length_mm, 2.0 * diagonal + 10.0));
+    assert_eq!(open.components[0].free_ends.len(), 2);
+}
+
 /// Two pieces drawn on top of each other enclose nothing; two that meet at both
 /// ends and are not the same curve do.
 #[test]
