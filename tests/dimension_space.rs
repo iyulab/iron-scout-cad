@@ -47,7 +47,7 @@ fn a_dimension_names_the_space_it_is_drawn_in() {
         .collect();
     assert_eq!(spaces[0], Some("*Paper_Space"));
     assert!(spaces[1..].iter().all(|s| *s == Some("*Model_Space")));
-    assert_eq!(spaces.len(), 16);
+    assert_eq!(spaces.len(), 20);
     let value = serde_json::to_value(&summary).unwrap();
     assert_eq!(value["dimensions"][0]["space"], "*Paper_Space");
 }

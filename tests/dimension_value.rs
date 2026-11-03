@@ -174,6 +174,37 @@ fn every_text_of_g25_reads_to_the_value_it_writes_and_nothing_more() {
             row("1x45\u{b0}", None, None, None, None, &[TextFormNotRead]),
             row("<> (1.250\")", Some(31.75), Some(Measured), None, None, &[]),
             row("<> [1.97]", Some(50.0), Some(Measured), None, None, &[]),
+            // A text with its own symmetric deviation: the typed value and the
+            // deviation, though the measurement repeats the value.
+            row(
+                "\u{2300}47.7\u{b1}0.03",
+                Some(47.7),
+                Some(Typed),
+                None,
+                Some(ToleranceRole::Symmetric { value: 0.03 }),
+                &[]
+            ),
+            // A rounded radius: the value is the typed one (1.4), not the
+            // measurement the span has (1.35) -- the drawing shows the text.
+            row("R1.4", Some(1.4), Some(Typed), None, None, &[]),
+            // A requirement in words has no value: said, not guessed.
+            row(
+                "concavity 5um~45um",
+                None,
+                None,
+                None,
+                None,
+                &[TextFormNotRead]
+            ),
+            // Unequal deviations about a typed value, as written.
+            row(
+                "45+0.05/-0.02",
+                Some(45.0),
+                Some(Typed),
+                None,
+                dev(0.05, -0.02),
+                &[]
+            ),
         ]
     );
 }

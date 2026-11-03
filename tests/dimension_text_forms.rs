@@ -75,6 +75,13 @@ fn every_text_is_reported_as_the_drawing_wrote_it_beside_its_measurement() {
             row("1x45\u{b0}", &[], 1.0),
             row("<> (1.250\")", &[], 31.75),
             row("<> [1.97]", &[], 50.0),
+            // A text that states its own deviation beside the measurement it
+            // repeats; a rounded radius whose text differs from the measurement;
+            // a requirement in words; unequal deviations about a typed value.
+            row("\u{2300}47.7\u{b1}0.03", &[], 47.7),
+            row("R1.4", &[], 1.35),
+            row("concavity 5um~45um", &[], 20.0),
+            row("45+0.05/-0.02", &[("+0.05", "-0.02", '^')], 45.0),
         ]
     );
 }
@@ -86,7 +93,11 @@ fn a_count_or_a_fit_does_not_change_what_was_measured() {
     let counted: Vec<_> = summary
         .dimensions
         .iter()
-        .filter(|d| d.plain.as_deref().is_some_and(|p| p.starts_with("4")))
+        .filter(|d| {
+            d.plain
+                .as_deref()
+                .is_some_and(|p| p.starts_with("4X") || p.starts_with("4-"))
+        })
         .map(|d| d.measurement)
         .collect();
     assert_eq!(counted, [Some(6.0), Some(6.0), Some(6.0)]);
