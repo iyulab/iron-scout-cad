@@ -174,7 +174,7 @@ fn drawing(entities: Vec<Value>) -> CadDatabase {
 fn common(id: u64, layer: &str) -> Value {
     let v: Value = serde_json::from_str(include_str!("golden/g26.expected.json")).unwrap();
     let mut c = v["entities"][0]["common"].clone();
-    c["id"] = id.into();
+    c["id"] = id.to_string().into();
     c["layer"] = json!({"type": "RESOLVED", "data": layer});
     c
 }

@@ -661,7 +661,7 @@ mod tests {
         let entities: Vec<serde_json::Value> = (0..n)
             .map(|i| {
                 let mut e = template.clone();
-                e["common"]["id"] = (1000 + i as u64).into();
+                e["common"]["id"] = (1000 + i as u64).to_string().into();
                 e["start_point"] = serde_json::json!({"x": 0.0, "y": 0.0, "z": 0.0});
                 e["end_point"] =
                     serde_json::json!({"x": 10.0 + i as f64, "y": (i % 7) as f64, "z": 0.0});

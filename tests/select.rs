@@ -8,7 +8,7 @@ use uncad_model::{CadDatabase, Point2D};
 
 fn common(id: u64, layer: Value) -> Value {
     json!({
-        "id": id, "origin": "VECTOR", "confidence": "HIGH",
+        "id": id.to_string(), "origin": "VECTOR", "confidence": "HIGH",
         "source_handle": {"type": "ABSENT"}, "layer": layer,
         "color_index": 256, "true_color": null, "invisible": false,
         "linetype": {"type": "BY_LAYER"}, "linetype_scale": 1.0,
@@ -105,11 +105,7 @@ fn window(x0: f64, y0: f64, x1: f64, y1: f64) -> Bounds {
 }
 
 fn ids(selection: &iron_scout_cad::Selected) -> Vec<u64> {
-    selection
-        .entities
-        .iter()
-        .map(|e| serde_json::to_value(e.id).unwrap().as_u64().unwrap())
-        .collect()
+    selection.entities.iter().map(|e| e.id.value()).collect()
 }
 
 #[test]
@@ -184,7 +180,7 @@ fn a_limit_keeps_the_first_by_id_and_the_total_counts_all() {
 #[test]
 fn ids_pick_those_entities_and_detail_carries_the_model_record() {
     let db = plan();
-    let id: EntityId = serde_json::from_value(json!(12)).unwrap();
+    let id = EntityId::new(12);
     let picked = select(&db, &Selection::new().with_ids([id]).with_detail());
     assert_eq!(ids(&picked), [12]);
     // The record is the model's own form -- the field names an edit uses.

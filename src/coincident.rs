@@ -272,7 +272,7 @@ mod tests {
             .enumerate()
             .map(|(i, mut e)| {
                 let mut c = common.clone();
-                c["id"] = (2000 + i as u64).into();
+                c["id"] = (2000 + i as u64).to_string().into();
                 e["common"] = c;
                 e
             })
@@ -290,7 +290,7 @@ mod tests {
     }
 
     fn id(i: u64) -> EntityId {
-        serde_json::from_value(serde_json::json!(2000 + i)).unwrap()
+        EntityId::new(2000 + i)
     }
 
     #[test]

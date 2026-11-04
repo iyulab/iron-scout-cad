@@ -11,7 +11,7 @@ use uncad_model::{CadDatabase, Point2D};
 
 fn common(id: u64) -> Value {
     json!({
-        "id": id, "origin": "VECTOR", "confidence": "HIGH",
+        "id": id.to_string(), "origin": "VECTOR", "confidence": "HIGH",
         "source_handle": {"type": "ABSENT"}, "layer": {"type": "RESOLVED", "data": "0"},
         "color_index": 256, "true_color": null, "invisible": false,
         "linetype": {"type": "BY_LAYER"}, "linetype_scale": 1.0,

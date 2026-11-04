@@ -402,7 +402,9 @@ fn a_tolerance_is_carried_from_the_style_the_overrides_and_the_text_alike() {
     style["tolerance_decimal_places"] = 2.into();
     let dims = v["entities"].as_array_mut().unwrap();
     let dim = |dims: &mut Vec<serde_json::Value>, id: u64| {
-        dims.iter().position(|e| e["common"]["id"] == id).unwrap()
+        dims.iter()
+            .position(|e| e["common"]["id"].as_str() == Some(id.to_string().as_str()))
+            .unwrap()
     };
     let at = dim(dims, 298);
     // DIMTP overridden; DIMTXT (140) is not a tolerance variable.
@@ -458,7 +460,9 @@ fn a_dimension_carries_the_length_factor_in_force_for_it() {
     v["tables"]["dim_styles"]["ISO-25"]["length_factor"] = 25.4.into();
     let dims = v["entities"].as_array_mut().unwrap();
     let dim = |dims: &mut Vec<serde_json::Value>, id: u64| {
-        dims.iter().position(|e| e["common"]["id"] == id).unwrap()
+        dims.iter()
+            .position(|e| e["common"]["id"].as_str() == Some(id.to_string().as_str()))
+            .unwrap()
     };
     let at = dim(dims, 298);
     dims[at]["style_overrides"] = serde_json::to_value(vec![StyleOverride {
@@ -493,7 +497,9 @@ fn a_dimension_is_basic_or_reference_only_by_what_its_file_states() {
     v["tables"]["dim_styles"]["ISO-25"]["text_gap"] = (-0.625).into();
     let dims = v["entities"].as_array_mut().unwrap();
     let at = |dims: &Vec<serde_json::Value>, id: u64| {
-        dims.iter().position(|e| e["common"]["id"] == id).unwrap()
+        dims.iter()
+            .position(|e| e["common"]["id"].as_str() == Some(id.to_string().as_str()))
+            .unwrap()
     };
     let unbox = serde_json::to_value(vec![StyleOverride {
         variable: 147,
@@ -552,7 +558,7 @@ fn a_feature_control_frame_is_listed_as_written() {
         .find(|e| e["type"] == "DIMENSION")
         .unwrap()["common"]
         .clone();
-    frame["id"] = 900.into();
+    frame["id"] = 900.to_string().into();
     v["entities"]
         .as_array_mut()
         .unwrap()

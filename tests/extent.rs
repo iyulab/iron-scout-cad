@@ -7,7 +7,7 @@ use uncad_model::{CadDatabase, Point2D};
 
 fn common(id: u64) -> Value {
     json!({
-        "id": id, "origin": "VECTOR", "confidence": "HIGH",
+        "id": id.to_string(), "origin": "VECTOR", "confidence": "HIGH",
         "source_handle": {"type": "ABSENT"}, "layer": {"type": "RESOLVED", "data": "0"},
         "color_index": 256, "true_color": null, "invisible": false,
         "linetype": {"type": "BY_LAYER"}, "linetype_scale": 1.0,
@@ -296,7 +296,7 @@ fn point(id: u64, x: f64, y: f64) -> Value {
 }
 
 fn id(n: u64) -> uncad_model::model::EntityId {
-    serde_json::from_value(json!(n)).unwrap()
+    uncad_model::model::EntityId::new(n)
 }
 
 #[test]

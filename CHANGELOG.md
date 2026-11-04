@@ -21,6 +21,9 @@ bumps the minor version.
 
 ### Changed
 
+- **Breaking:** entity IDs are decimal strings in every answer and in the models read (`"id": "42"`, not
+  a number), following `uncad-model`. A consumer that parsed an ID as a number reads it as text instead,
+  and one that sends an ID back sends the same string.
 - The shape signature and `contours` now read lines, circles, arcs and polylines through one
   extraction of the pieces they draw, where each used to read the entities itself. Results are
   unchanged for drawings whose entities are well-formed. Where an entity is malformed two things

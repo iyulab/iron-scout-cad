@@ -21,7 +21,7 @@ fn entity_at(v: &mut Value, id: u64) -> &mut Value {
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|e| e["common"]["id"] == id)
+        .find(|e| e["common"]["id"].as_str() == Some(id.to_string().as_str()))
         .unwrap()
 }
 
