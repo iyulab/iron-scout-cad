@@ -87,6 +87,10 @@ pub enum Refusal {
 /// The ends of the model space within `join_gap_um` of the end of `entity`
 /// named by `anchor` (a LINE or ARC's `Start` / `End`, a polyline's
 /// `Vertex(i)`).
+///
+/// Pass [`ENDPOINT_GAP_UM`](crate::ENDPOINT_GAP_UM) to list the ends the
+/// shape signature and the contour totals treat as touching, so that what is
+/// listed here and what those count as joined agree.
 pub fn coincident_ends(
     db: &CadDatabase,
     entity: EntityId,
