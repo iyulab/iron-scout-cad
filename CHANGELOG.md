@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-05
+
 ### Added
 
 - `coincident_ends(db, entity, anchor, join_gap_um)`: the other ends of the model space that sit within
@@ -33,6 +35,8 @@ bumps the minor version.
   piece-count overflow flags of a drawing that sits at the limit).
 - The end of a piece and the coordinate guard for placing one are computed in one place for the shape
   signature and `contours`; results are unchanged.
+
+- Built on `uncad-model` 0.12.0.
 
 ## [0.15.0] - 2026-11-02
 
