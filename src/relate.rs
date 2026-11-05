@@ -24,7 +24,10 @@ use crate::limits::{NotEntered, Walk};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
-use uncad_model::model::{DimensionEntity, DimensionKind, Entity, EntityId, Ref};
+use uncad_model::model::{
+    ArcEntity, CircleEntity, DimensionEntity, DimensionKind, EllipseEntity, Entity, EntityId,
+    LwPolylineEntity, Ref, SolidEntity, SplineEntity,
+};
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
 /// A point the format defines for an entity.
@@ -332,6 +335,228 @@ struct Dimension {
     points: Vec<(PointRole, Point2D)>,
 }
 
+/// What an entity is to the search once placed: the points the format defines
+/// for it and, where its curve is known, the curve.
+#[derive(Default)]
+struct Footprint {
+    defined: Vec<(Anchor, Point2D)>,
+    shape: Option<Shape>,
+}
+
+impl Footprint {
+    /// An entity that defines points and no known curve.
+    fn points(defined: impl IntoIterator<Item = (Anchor, Point2D)>) -> Self {
+        Footprint {
+            defined: defined.into_iter().collect(),
+            shape: None,
+        }
+    }
+
+    /// The vertices of a polyline-like entity, numbered from 0.
+    fn vertices(points: impl IntoIterator<Item = Point2D>) -> Self {
+        Self::points(
+            points
+                .into_iter()
+                .enumerate()
+                .map(|(i, p)| (Anchor::Vertex(i), p)),
+        )
+    }
+}
+
+/// The footprint of `entity` placed through `t`. An entity whose plane is not
+/// flat, or whose placement is not a similarity where its curve needs one, is
+/// not searched: the reason is the error.
+fn footprint(entity: &Entity, t: &Affine2) -> Result<Footprint, NotSearchedReason> {
+    let at = |q: Point2D| t.apply(q);
+    Ok(match entity {
+        Entity::Line(l) => {
+            let (a, b) = (at(xy(l.start_point)), at(xy(l.end_point)));
+            Footprint {
+                defined: vec![(Anchor::Start, a), (Anchor::End, b)],
+                shape: Some(Shape::Segments(straight(&[a, b], false))),
+            }
+        }
+        Entity::Circle(c) => circle_footprint(c, t)?,
+        Entity::Arc(a) => arc_footprint(a, t)?,
+        Entity::LwPolyline(pl) | Entity::Polyline2D(pl) => polyline_footprint(pl, t)?,
+        Entity::Polyline3D(pl) => {
+            let points: Vec<Point2D> = pl.vertices.iter().map(|&v| at(xy(v))).collect();
+            Footprint {
+                shape: Some(Shape::Segments(straight(&points, pl.closed))),
+                ..Footprint::vertices(points)
+            }
+        }
+        Entity::MLine(m) => Footprint::vertices(m.vertices.iter().map(|v| at(xy(v.point)))),
+        Entity::Face3D(f) => Footprint::points(
+            [f.corner1, f.corner2, f.corner3, f.corner4]
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| (Anchor::Corner(i), at(xy(c)))),
+        ),
+        Entity::Solid(s) | Entity::Trace(s) => solid_footprint(s, t)?,
+        Entity::PolylineMesh(m) | Entity::PolylinePFace(m) => {
+            let mut seen: Vec<Point2D> = Vec::new();
+            for p in m.wireframe_edges.iter().flatten() {
+                let p = at(xy(*p));
+                if !seen.contains(&p) {
+                    seen.push(p);
+                }
+            }
+            Footprint::vertices(seen)
+        }
+        Entity::Spline(s) => Footprint::points(spline_points(s, t)),
+        Entity::Ellipse(e) => Footprint::points(ellipse_points(e, t)),
+        Entity::Ray(r) | Entity::XLine(r) => Footprint::points([(Anchor::Base, at(xy(r.point)))]),
+        Entity::Point(p) => Footprint::points([(Anchor::Position, at(xy(p.position)))]),
+        _ => Footprint::default(),
+    })
+}
+
+fn circle_footprint(c: &CircleEntity, t: &Affine2) -> Result<Footprint, NotSearchedReason> {
+    let (Some(plane), Some(s)) = (flat_plane(c.extrusion), t.similarity_scale()) else {
+        return Err(NotSearchedReason::NonSimilarPlacement);
+    };
+    let center = t.apply(world_xy(plane, c.center));
+    Ok(Footprint {
+        defined: vec![(Anchor::Center, center)],
+        shape: Some(Shape::Circle {
+            center,
+            radius: c.radius * s,
+        }),
+    })
+}
+
+fn arc_footprint(a: &ArcEntity, t: &Affine2) -> Result<Footprint, NotSearchedReason> {
+    let (Some(plane), Some(s)) = (flat_plane(a.extrusion), t.similarity_scale()) else {
+        return Err(NotSearchedReason::NonSimilarPlacement);
+    };
+    let on = |angle: f64| {
+        t.apply(world_xy(
+            plane,
+            Point3D {
+                x: a.center.x + a.radius * angle.cos(),
+                y: a.center.y + a.radius * angle.sin(),
+                z: a.center.z,
+            },
+        ))
+    };
+    let center = t.apply(world_xy(plane, a.center));
+    let defined = vec![
+        (Anchor::Center, center),
+        (Anchor::Start, on(a.start_angle)),
+        (Anchor::End, on(a.end_angle)),
+    ];
+    // An arc whose angles are equal is the whole circle or nothing; its
+    // points are still the file's, its curve is not known.
+    let shape = a.sweep().map(|sweep| {
+        // Seen from below (a mirror copy's plane) the arc's own sweep runs
+        // clockwise, so its world start is its end.
+        let start = if plane.z_axis().z < 0.0 {
+            world_angle(plane, a.end_angle)
+        } else {
+            world_angle(plane, a.start_angle)
+        };
+        Shape::Arc {
+            center,
+            radius: a.radius * s,
+            start: start + t.rotation(),
+            sweep,
+        }
+    });
+    Ok(Footprint { defined, shape })
+}
+
+fn polyline_footprint(pl: &LwPolylineEntity, t: &Affine2) -> Result<Footprint, NotSearchedReason> {
+    let Some(plane) = flat_plane(pl.extrusion) else {
+        return Err(NotSearchedReason::NonSimilarPlacement);
+    };
+    let has_arcs = pl.vertices.iter().any(|v| v.bulge != 0.0);
+    if has_arcs && t.similarity_scale().is_none() {
+        return Err(NotSearchedReason::NonSimilarPlacement);
+    }
+    let turning = plane.z_axis().z.signum();
+    let placed: Vec<PolylineVertex> = pl
+        .vertices
+        .iter()
+        .map(|v| PolylineVertex {
+            point: t.apply(world_xy(
+                plane,
+                Point3D {
+                    x: v.point.x,
+                    y: v.point.y,
+                    z: pl.elevation,
+                },
+            )),
+            bulge: v.bulge * turning,
+            ..*v
+        })
+        .collect();
+    Ok(Footprint {
+        shape: Some(Shape::Segments(
+            bulge::segments(&placed, pl.closed).collect(),
+        )),
+        ..Footprint::vertices(placed.iter().map(|v| v.point))
+    })
+}
+
+fn solid_footprint(s: &SolidEntity, t: &Affine2) -> Result<Footprint, NotSearchedReason> {
+    let Some(plane) = flat_plane(s.extrusion) else {
+        return Err(NotSearchedReason::NonSimilarPlacement);
+    };
+    Ok(Footprint::points(
+        [s.corner1, s.corner2, s.corner3, s.corner4]
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let c = Point3D {
+                    x: c.x,
+                    y: c.y,
+                    z: s.elevation,
+                };
+                (Anchor::Corner(i), t.apply(world_xy(plane, c)))
+            }),
+    ))
+}
+
+/// A spline's fit points, and its first and last control points.
+fn spline_points(s: &SplineEntity, t: &Affine2) -> Vec<(Anchor, Point2D)> {
+    let mut defined: Vec<(Anchor, Point2D)> = s
+        .fit_points
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| (Anchor::Fit(i), t.apply(xy(p))))
+        .collect();
+    if let (Some(&first), Some(&last)) = (s.control_points.first(), s.control_points.last()) {
+        defined.extend([
+            (Anchor::ControlStart, t.apply(xy(first))),
+            (Anchor::ControlEnd, t.apply(xy(last))),
+        ]);
+    }
+    defined
+}
+
+/// An ellipse's centre and the two ends of its major axis.
+fn ellipse_points(e: &EllipseEntity, t: &Affine2) -> Vec<(Anchor, Point2D)> {
+    let (c, m) = (e.center, e.major_axis_endpoint);
+    vec![
+        (Anchor::Center, t.apply(xy(c))),
+        (
+            Anchor::AxisEnd,
+            t.apply(Point2D {
+                x: c.x + m.x,
+                y: c.y + m.y,
+            }),
+        ),
+        (
+            Anchor::AxisEndOpposite,
+            t.apply(Point2D {
+                x: c.x - m.x,
+                y: c.y - m.y,
+            }),
+        ),
+    ]
+}
+
 struct Collect<'a> {
     db: &'a CadDatabase,
     spaces: BTreeMap<EntityId, &'a str>,
@@ -369,200 +594,18 @@ impl Collect<'_> {
     }
 
     fn entity(&mut self, entity: &Entity, t: &Affine2, via: &mut Vec<EntityId>) {
-        let at = |q: Point2D| t.apply(q);
-        let scale = t.similarity_scale();
-        let mut defined: Vec<(Anchor, Point2D)> = Vec::new();
-        let mut shape = None;
         match entity {
-            Entity::Line(l) => {
-                let (a, b) = (at(xy(l.start_point)), at(xy(l.end_point)));
-                defined.extend([(Anchor::Start, a), (Anchor::End, b)]);
-                shape = Some(Shape::Segments(straight(&[a, b], false)));
-            }
-            Entity::Circle(c) => {
-                let (Some(plane), Some(s)) = (flat_plane(c.extrusion), scale) else {
-                    return self.not_searched(entity, via, NotSearchedReason::NonSimilarPlacement);
-                };
-                let center = at(world_xy(plane, c.center));
-                defined.push((Anchor::Center, center));
-                shape = Some(Shape::Circle {
-                    center,
-                    radius: c.radius * s,
-                });
-            }
-            Entity::Arc(a) => {
-                let (Some(plane), Some(s)) = (flat_plane(a.extrusion), scale) else {
-                    return self.not_searched(entity, via, NotSearchedReason::NonSimilarPlacement);
-                };
-                let on = |angle: f64| {
-                    at(world_xy(
-                        plane,
-                        Point3D {
-                            x: a.center.x + a.radius * angle.cos(),
-                            y: a.center.y + a.radius * angle.sin(),
-                            z: a.center.z,
-                        },
-                    ))
-                };
-                let center = at(world_xy(plane, a.center));
-                defined.extend([
-                    (Anchor::Center, center),
-                    (Anchor::Start, on(a.start_angle)),
-                    (Anchor::End, on(a.end_angle)),
-                ]);
-                // An arc whose angles are equal is the whole circle or
-                // nothing; its points are still the file's, its curve is not
-                // known.
-                if let Some(sweep) = a.sweep() {
-                    // Seen from below (a mirror copy's plane) the arc's own
-                    // sweep runs clockwise, so its world start is its end.
-                    let start = if plane.z_axis().z < 0.0 {
-                        world_angle(plane, a.end_angle)
-                    } else {
-                        world_angle(plane, a.start_angle)
-                    };
-                    shape = Some(Shape::Arc {
-                        center,
-                        radius: a.radius * s,
-                        start: start + t.rotation(),
-                        sweep,
-                    });
-                }
-            }
-            Entity::LwPolyline(pl) | Entity::Polyline2D(pl) => {
-                let Some(plane) = flat_plane(pl.extrusion) else {
-                    return self.not_searched(entity, via, NotSearchedReason::NonSimilarPlacement);
-                };
-                let has_arcs = pl.vertices.iter().any(|v| v.bulge != 0.0);
-                if has_arcs && scale.is_none() {
-                    return self.not_searched(entity, via, NotSearchedReason::NonSimilarPlacement);
-                }
-                let turning = plane.z_axis().z.signum();
-                let placed: Vec<PolylineVertex> = pl
-                    .vertices
-                    .iter()
-                    .map(|v| PolylineVertex {
-                        point: at(world_xy(
-                            plane,
-                            Point3D {
-                                x: v.point.x,
-                                y: v.point.y,
-                                z: pl.elevation,
-                            },
-                        )),
-                        bulge: v.bulge * turning,
-                        ..*v
-                    })
-                    .collect();
-                defined.extend(
-                    placed
-                        .iter()
-                        .enumerate()
-                        .map(|(i, v)| (Anchor::Vertex(i), v.point)),
-                );
-                shape = Some(Shape::Segments(
-                    bulge::segments(&placed, pl.closed).collect(),
-                ));
-            }
-            Entity::Polyline3D(pl) => {
-                let points: Vec<Point2D> = pl.vertices.iter().map(|&v| at(xy(v))).collect();
-                defined.extend(
-                    points
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &p)| (Anchor::Vertex(i), p)),
-                );
-                shape = Some(Shape::Segments(straight(&points, pl.closed)));
-            }
-            Entity::MLine(m) => defined.extend(
-                m.vertices
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| (Anchor::Vertex(i), at(xy(v.point)))),
-            ),
-            Entity::Face3D(f) => defined.extend(
-                [f.corner1, f.corner2, f.corner3, f.corner4]
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, c)| (Anchor::Corner(i), at(xy(c)))),
-            ),
-            Entity::Solid(s) | Entity::Trace(s) => {
-                let Some(plane) = flat_plane(s.extrusion) else {
-                    return self.not_searched(entity, via, NotSearchedReason::NonSimilarPlacement);
-                };
-                defined.extend(
-                    [s.corner1, s.corner2, s.corner3, s.corner4]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, c)| {
-                            let c = Point3D {
-                                x: c.x,
-                                y: c.y,
-                                z: s.elevation,
-                            };
-                            (Anchor::Corner(i), at(world_xy(plane, c)))
-                        }),
-                );
-            }
-            Entity::PolylineMesh(m) | Entity::PolylinePFace(m) => {
-                let mut seen: Vec<Point2D> = Vec::new();
-                for p in m.wireframe_edges.iter().flatten() {
-                    let p = at(xy(*p));
-                    if !seen.contains(&p) {
-                        seen.push(p);
-                    }
-                }
-                defined.extend(
-                    seen.into_iter()
-                        .enumerate()
-                        .map(|(i, p)| (Anchor::Vertex(i), p)),
-                );
-            }
-            Entity::Spline(s) => {
-                defined.extend(
-                    s.fit_points
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &p)| (Anchor::Fit(i), at(xy(p)))),
-                );
-                if let (Some(&first), Some(&last)) =
-                    (s.control_points.first(), s.control_points.last())
-                {
-                    defined.extend([
-                        (Anchor::ControlStart, at(xy(first))),
-                        (Anchor::ControlEnd, at(xy(last))),
-                    ]);
-                }
-            }
-            Entity::Ellipse(e) => {
-                let (c, m) = (e.center, e.major_axis_endpoint);
-                defined.extend([
-                    (Anchor::Center, at(xy(c))),
-                    (
-                        Anchor::AxisEnd,
-                        at(Point2D {
-                            x: c.x + m.x,
-                            y: c.y + m.y,
-                        }),
-                    ),
-                    (
-                        Anchor::AxisEndOpposite,
-                        at(Point2D {
-                            x: c.x - m.x,
-                            y: c.y - m.y,
-                        }),
-                    ),
-                ]);
-            }
-            Entity::Ray(r) | Entity::XLine(r) => defined.push((Anchor::Base, at(xy(r.point)))),
-            Entity::Point(p) => defined.push((Anchor::Position, at(xy(p.position)))),
             Entity::Dimension(d) => self.dimension(d, t, via),
             Entity::Unknown { type_name, .. } => {
                 *self.unmodeled.entry(type_name.clone()).or_default() += 1;
             }
             _ => {}
         }
-        if !defined.is_empty() || shape.is_some() {
+        let footprint = match footprint(entity, t) {
+            Ok(footprint) => footprint,
+            Err(reason) => return self.not_searched(entity, via, reason),
+        };
+        if !footprint.defined.is_empty() || footprint.shape.is_some() {
             let common = entity.common();
             let owner = self.owners.len();
             self.owners.push(Owner {
@@ -572,12 +615,12 @@ impl Collect<'_> {
                 space: self.space_of(common.id, via),
             });
             self.defined
-                .extend(
-                    defined
-                        .into_iter()
-                        .map(|(anchor, at)| Defined { owner, anchor, at }),
-                );
-            if let Some(shape) = shape {
+                .extend(footprint.defined.into_iter().map(|(anchor, at)| Defined {
+                    owner,
+                    anchor,
+                    at,
+                }));
+            if let Some(shape) = footprint.shape {
                 let (lo, hi) = shape.bounds();
                 self.curves.push(Curve {
                     owner,
