@@ -612,6 +612,10 @@ mod role_tests {
 pub struct LabelledText {
     pub label: TextRef,
     pub value: TextRef,
+    /// The lower of the two texts' read confidences. It says how surely the
+    /// texts were *read*, not how surely they belong together: a pair is made
+    /// by position alone (the nearest value beside or beneath a label), and
+    /// when two values are equally near both are listed, never one picked.
     pub confidence: Confidence,
     /// Where the value sits relative to the label.
     #[serde(default)]
