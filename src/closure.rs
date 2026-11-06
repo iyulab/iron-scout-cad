@@ -322,9 +322,76 @@ fn contours_within(
     search_budget: u64,
 ) -> Option<Contours> {
     let k = db.header.units().and_then(|u| u.to_mm)?;
-    let spaces = spaces(db);
     let gap_mm = join_gap_um as f64 / 1000.0;
 
+    let Collected {
+        owners,
+        pieces,
+        mut not_read,
+    } = collect_pieces(db, k, gap_mm);
+
+    // Past these bounds no group is told, and the drawing says so.
+    let untold = |name: &str, how_many: usize, mut not_read: BTreeMap<String, u32>| {
+        not_read.insert(name.to_string(), how_many.min(u32::MAX as usize) as u32);
+        Some(Contours {
+            join_gap_um,
+            loops: 0,
+            branched: 0,
+            open: 0,
+            components: Vec::new(),
+            not_read,
+        })
+    };
+    if pieces.len() > MAX_PIECES {
+        return untold("PIECE_LIMIT", pieces.len(), not_read);
+    }
+
+    // The ends that can be joined, with the piece each belongs to.
+    let mut ends: Vec<([f64; 2], usize)> = Vec::new();
+    for (i, p) in pieces.iter().enumerate() {
+        if let Some([a, b]) = p.ends {
+            ends.push((a, i));
+            ends.push((b, i));
+        }
+    }
+
+    let reach = gap_mm + EPS_MM;
+    let Some((mut parent, partners)) = join_ends(&pieces, &ends, reach, pair_budget) else {
+        return untold("PARTNER_BUDGET", ends.len(), not_read);
+    };
+
+    let told = tell_groups(&pieces, &ends, &partners, &mut parent, reach);
+
+    let (answers, budget_left_out) = nearest_gaps(&ends, &told, search_budget);
+
+    let (components, loops, branched, open) =
+        components_of(told, &pieces, &owners, &ends, &answers, k);
+    if budget_left_out > 0 {
+        not_read.insert("NEAREST_GAP_BUDGET".to_string(), budget_left_out);
+    }
+    Some(Contours {
+        join_gap_um,
+        loops,
+        branched,
+        open,
+        components,
+        not_read,
+    })
+}
+
+/// What collecting the pieces found: each piece's owner, the pieces, and the
+/// kinds left out with how many of each.
+struct Collected {
+    owners: Vec<(EntityId, String)>,
+    pieces: Vec<Piece>,
+    not_read: BTreeMap<String, u32>,
+}
+
+/// The pieces of model space's lines, circles, arcs and polylines, placed in
+/// millimetres, with the owner of each; what was left out is counted under
+/// what it was left out for.
+fn collect_pieces(db: &CadDatabase, k: f64, gap_mm: f64) -> Collected {
+    let spaces = spaces(db);
     let mut owners: Vec<(EntityId, String)> = Vec::new();
     let mut pieces: Vec<Piece> = Vec::new();
     let mut not_read: BTreeMap<String, u32> = BTreeMap::new();
@@ -381,36 +448,33 @@ fn contours_within(
             pieces.extend(mine);
         }
     }
-
-    // Past these bounds no group is told, and the drawing says so.
-    let untold = |name: &str, how_many: usize, mut not_read: BTreeMap<String, u32>| {
-        not_read.insert(name.to_string(), how_many.min(u32::MAX as usize) as u32);
-        Some(Contours {
-            join_gap_um,
-            loops: 0,
-            branched: 0,
-            open: 0,
-            components: Vec::new(),
-            not_read,
-        })
-    };
-    if pieces.len() > MAX_PIECES {
-        return untold("PIECE_LIMIT", pieces.len(), not_read);
+    Collected {
+        owners,
+        pieces,
+        not_read,
     }
+}
 
-    // The ends that can be joined, with the piece each belongs to.
-    let mut ends: Vec<([f64; 2], usize)> = Vec::new();
-    for (i, p) in pieces.iter().enumerate() {
-        if let Some([a, b]) = p.ends {
-            ends.push((a, i));
-            ends.push((b, i));
-        }
+fn find(parent: &mut [usize], mut a: usize) -> usize {
+    while parent[a] != a {
+        parent[a] = parent[parent[a]];
+        a = parent[a];
     }
+    a
+}
 
+/// The partners of each end -- the ends of other pieces within `reach` -- and
+/// the pieces those joins connect, as a forest of parents. `None` when the
+/// search spends more than `pair_budget` comparisons.
+fn join_ends(
+    pieces: &[Piece],
+    ends: &[([f64; 2], usize)],
+    reach: f64,
+    pair_budget: u64,
+) -> Option<(Vec<usize>, Vec<Partners>)> {
     // Partners of each end: the ends of other pieces within the gap. The cell
     // is wider than the distance that joins, so partners lie in the cell's
     // neighbours.
-    let reach = gap_mm + EPS_MM;
     let cell = reach.max(1e-6);
     let key = |p: [f64; 2]| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
     let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
@@ -418,13 +482,6 @@ fn contours_within(
         grid.entry(key(*at)).or_default().push(n);
     }
     let mut parent: Vec<usize> = (0..pieces.len()).collect();
-    fn find(parent: &mut [usize], mut a: usize) -> usize {
-        while parent[a] != a {
-            parent[a] = parent[parent[a]];
-            a = parent[a];
-        }
-        a
-    }
     let mut partners = vec![Partners::None; ends.len()];
     let mut comparisons = 0u64;
     for (n, (at, piece)) in ends.iter().enumerate() {
@@ -436,7 +493,7 @@ fn contours_within(
                 };
                 comparisons += cellmates.len() as u64;
                 if comparisons > pair_budget {
-                    return untold("PARTNER_BUDGET", ends.len(), not_read);
+                    return None;
                 }
                 for &m in cellmates {
                     let (other, other_piece) = &ends[m];
@@ -458,11 +515,29 @@ fn contours_within(
             }
         }
     }
+    Some((parent, partners))
+}
 
+/// A group of pieces that meet, how it closes and its free ends.
+struct Group {
+    members: Vec<usize>,
+    kind: ContourKind,
+    free: Vec<usize>,
+}
+
+/// The groups of the pieces the joins connect, each with how it closes and
+/// which of its ends are free.
+fn tell_groups(
+    pieces: &[Piece],
+    ends: &[([f64; 2], usize)],
+    partners: &[Partners],
+    parent: &mut [usize],
+    reach: f64,
+) -> Vec<Group> {
     // Group the pieces.
     let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for i in 0..pieces.len() {
-        let r = find(&mut parent, i);
+        let r = find(parent, i);
         groups.entry(r).or_default().push(i);
     }
     let mut end_of: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
@@ -471,11 +546,6 @@ fn contours_within(
     }
 
     // How each group closes, and its free ends.
-    struct Group {
-        members: Vec<usize>,
-        kind: ContourKind,
-        free: Vec<usize>,
-    }
     let mut told: Vec<Group> = Vec::new();
     for members in groups.into_values() {
         let mut kind = ContourKind::Loop;
@@ -511,7 +581,16 @@ fn contours_within(
             free,
         });
     }
+    told
+}
 
+/// For each free end, the distance to the nearest end of another piece (or
+/// `None`), and how many ends the search budget left without an answer.
+fn nearest_gaps(
+    ends: &[([f64; 2], usize)],
+    told: &[Group],
+    search_budget: u64,
+) -> (BTreeMap<usize, Option<f64>>, u32) {
     // Nearest other end for the free ends, scanning outward in x. The free
     // ends are taken in the order of their places, so which of them a spent
     // budget leaves without an answer does not depend on the file's order.
@@ -572,7 +651,19 @@ fn contours_within(
         };
         answers.insert(n, answer);
     }
+    (answers, budget_left_out)
+}
 
+/// The contours the groups make, ordered, and how many of them are loops,
+/// branched and open.
+fn components_of(
+    told: Vec<Group>,
+    pieces: &[Piece],
+    owners: &[(EntityId, String)],
+    ends: &[([f64; 2], usize)],
+    answers: &BTreeMap<usize, Option<f64>>,
+    k: f64,
+) -> (Vec<Contour>, u32, u32, u32) {
     let mut components = Vec::new();
     let (mut loops, mut branched, mut open) = (0u32, 0u32, 0u32);
     for g in told {
@@ -635,17 +726,7 @@ fn contours_within(
             .then(a.pieces.cmp(&b.pieces))
             .then(a.length_mm.total_cmp(&b.length_mm))
     });
-    if budget_left_out > 0 {
-        not_read.insert("NEAREST_GAP_BUDGET".to_string(), budget_left_out);
-    }
-    Some(Contours {
-        join_gap_um,
-        loops,
-        branched,
-        open,
-        components,
-        not_read,
-    })
+    (components, loops, branched, open)
 }
 
 #[cfg(test)]
