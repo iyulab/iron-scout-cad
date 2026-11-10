@@ -50,7 +50,7 @@ use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, Ocs, Point2D, Point3D};
 
 use crate::extent::Reach;
-use crate::limits::{cells, NotEntered, Walk};
+use crate::limits::{NotEntered, Walk};
 use crate::moments::Moments;
 use crate::outline::{self, Part, Why};
 use crate::summary::DimensionSummary;
@@ -641,7 +641,7 @@ impl Counter<'_> {
         // Each cell of a grid is a placement of the block, counted as one;
         // a reference that cannot be entered is counted once.
         let mut any = false;
-        for (column, row) in cells(i) {
+        for (column, row) in i.cells() {
             any = true;
             let (block, inner) = match self.blocks.enter(self.tables, &i.block_name, |block| {
                 at.then(i, block.base_point, column, row)

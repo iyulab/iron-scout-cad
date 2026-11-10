@@ -37,7 +37,7 @@
 //! not drawn and is not read.
 
 use crate::hit_test::spaces;
-use crate::limits::{cells, NotEntered, Walk};
+use crate::limits::{NotEntered, Walk};
 use crate::outline::{self, is_sane, Part, Why};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
@@ -540,7 +540,7 @@ impl<'a> Collector<'a> {
     /// the first one left out are left out.
     fn insert(&mut self, insert: &InsertEntity, at: &Placement, layer: &str) {
         let mut any = false;
-        for (column, row) in cells(insert) {
+        for (column, row) in insert.cells() {
             any = true;
             if !self.insert_cell(insert, at, layer, column, row) {
                 return;

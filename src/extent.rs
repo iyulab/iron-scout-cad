@@ -3,7 +3,7 @@
 
 use crate::boundary::hatch_points;
 use crate::geometry::{flat_in_xy, image_frame, in_plane, mline_lines, xy};
-use crate::limits::{cells, NotEntered, Walk};
+use crate::limits::{NotEntered, Walk};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::f64::consts::{PI, TAU};
@@ -283,7 +283,7 @@ impl<'a> Reach<'a> {
             // insertion point is measured.
             Entity::Insert(insert) => {
                 let mut any = false;
-                for (column, row) in cells(insert) {
+                for (column, row) in insert.cells() {
                     any = true;
                     if (column, row) != (0, 0) {
                         let offset = insert.cell_offset(column, row);

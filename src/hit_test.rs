@@ -36,7 +36,7 @@ use uncad_model::model::{
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
-use crate::limits::{cells, NotEntered, Walk};
+use crate::limits::{NotEntered, Walk};
 
 /// One entity at the point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -866,7 +866,7 @@ impl Search<'_> {
                 // own insertion point an anchor.
                 Entity::Insert(insert) => {
                     let mut any = false;
-                    for (column, row) in cells(insert) {
+                    for (column, row) in insert.cells() {
                         any = true;
                         if (column, row) != (0, 0) {
                             let offset = insert.cell_offset(column, row);

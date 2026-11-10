@@ -20,7 +20,7 @@ use crate::geometry::{
     distance, distance_to_arc, distance_to_segments, flat_plane, world_angle, world_xy, xy,
 };
 use crate::hit_test::{spaces, NotSearched, NotSearchedReason};
-use crate::limits::{cells, NotEntered, Walk};
+use crate::limits::{NotEntered, Walk};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
@@ -636,7 +636,7 @@ impl Collect<'_> {
             Entity::Insert(insert) => {
                 self.note_external(entity, &insert.block_name, via);
                 let mut any = false;
-                for (column, row) in cells(insert) {
+                for (column, row) in insert.cells() {
                     any = true;
                     let placed = self.place(
                         entity,
