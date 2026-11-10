@@ -3,7 +3,7 @@
 
 use crate::boundary::hatch_points;
 use crate::geometry::{flat_in_xy, image_frame, in_plane, mline_lines, xy};
-use crate::limits::{NotEntered, Walk};
+use crate::limits::{cells, NotEntered, Walk};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::f64::consts::{PI, TAU};
@@ -279,11 +279,29 @@ impl<'a> Reach<'a> {
             not_measured.insert(e.type_name().to_string());
         }
         match e {
+            // Each cell of a grid is a placement of the block, and its own
+            // insertion point is measured.
             Entity::Insert(insert) => {
-                let placed = |block: &uncad_model::tables::BlockRecord| {
-                    insert.world_transform(block.base_point)
-                };
-                self.follow(e, &layer, &insert.block_name, placed, t, out, not_measured);
+                let mut any = false;
+                for (column, row) in cells(insert) {
+                    any = true;
+                    if (column, row) != (0, 0) {
+                        let offset = insert.cell_offset(column, row);
+                        out.push(t.apply(Point2D {
+                            x: insert.insertion_point.x + offset.x,
+                            y: insert.insertion_point.y + offset.y,
+                        }));
+                    }
+                    let placed = |block: &uncad_model::tables::BlockRecord| {
+                        insert.world_transform_at(block.base_point, column, row)
+                    };
+                    if !self.follow(e, &layer, &insert.block_name, placed, t, out, not_measured) {
+                        break;
+                    }
+                }
+                if !any {
+                    not_measured.insert("INSERT_EMPTY_GRID".to_string());
+                }
             }
             // A table's block holds what the table draws, placed as though
             // based at the origin -- where the renderer places it.
@@ -311,7 +329,8 @@ impl<'a> Reach<'a> {
 
     /// Measures the block `owner` (effectively on `layer`) names, placed
     /// through its own transform (`own`, given the block) and then `t`; when
-    /// it cannot, names `owner`'s type with the reason in `not_measured`.
+    /// it cannot, names `owner`'s type with the reason in `not_measured` and
+    /// returns `false`.
     #[allow(clippy::too_many_arguments)]
     fn follow(
         &mut self,
@@ -322,7 +341,7 @@ impl<'a> Reach<'a> {
         t: &Affine2,
         out: &mut Vec<Point2D>,
         not_measured: &mut BTreeSet<String>,
-    ) {
+    ) -> bool {
         let (block, own) = match self.walk.enter(self.tables, block_name, own) {
             Ok(entered) => entered,
             Err(why) => {
@@ -336,7 +355,7 @@ impl<'a> Reach<'a> {
                     NotEntered::BudgetExhausted => "BUDGET_EXHAUSTED",
                 };
                 not_measured.insert(format!("{}_{reason}", owner.type_name()));
-                return;
+                return false;
             }
         };
         let placed = own.then(t);
@@ -346,6 +365,7 @@ impl<'a> Reach<'a> {
         }
         self.reference_layers.pop();
         self.walk.leave();
+        true
     }
 }
 

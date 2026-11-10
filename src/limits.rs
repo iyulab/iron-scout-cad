@@ -123,6 +123,19 @@ impl Walk {
     }
 }
 
+/// The `(column, row)` of each placement a block reference makes of its
+/// block, row by row: one for a reference with no grid, one for each
+/// distinct cell of a grid, none for a grid with no cell. A walk spends its
+/// budget on each placement and stops at the first one it cannot take.
+pub(crate) fn cells(
+    insert: &uncad_model::model::InsertEntity,
+) -> Box<dyn Iterator<Item = (u32, u32)>> {
+    match &insert.array {
+        Some(grid) => Box::new(grid.cells()),
+        None => Box::new(std::iter::once((0, 0))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

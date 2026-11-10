@@ -50,7 +50,7 @@ use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, Ocs, Point2D, Point3D};
 
 use crate::extent::Reach;
-use crate::limits::{NotEntered, Walk};
+use crate::limits::{cells, NotEntered, Walk};
 use crate::moments::Moments;
 use crate::outline::{self, Part, Why};
 use crate::summary::DimensionSummary;
@@ -314,10 +314,18 @@ impl Transform {
         )
     }
 
-    /// This transform followed by `insert`'s placement of its block: the
+    /// This transform followed by `insert`'s placement of its block -- the
+    /// cell at `column` and `row` of its grid, which differs from the others
+    /// by where it lies and not by how the block is turned or scaled: the
     /// block's axes scaled, rotated about its z, then laid in the plane
     /// its extrusion names.
-    fn then(&self, insert: &InsertEntity, base_point: Point3D) -> Option<Self> {
+    fn then(
+        &self,
+        insert: &InsertEntity,
+        base_point: Point3D,
+        column: u32,
+        row: u32,
+    ) -> Option<Self> {
         let ocs = Ocs::of(insert.extrusion)?;
         let (s, c) = insert.rotation.sin_cos();
         let (x, y, z) = (ocs.x_axis(), ocs.y_axis(), ocs.z_axis());
@@ -340,7 +348,7 @@ impl Transform {
         };
         let place = self
             .place
-            .zip(insert.world_transform(base_point))
+            .zip(insert.world_transform_at(base_point, column, row))
             .map(|(outer, own)| own.then(&outer));
         Some(Transform {
             columns,
@@ -630,26 +638,35 @@ impl Counter<'_> {
             bump(&mut self.excluded, name);
             return;
         }
-        let (block, inner) = match self.blocks.enter(self.tables, &i.block_name, |block| {
-            at.then(i, block.base_point)
-        }) {
-            Ok(entered) => entered,
-            Err(why) => {
-                let key = match why {
-                    NotEntered::Absent | NotEntered::Unresolved | NotEntered::Undefined => {
-                        "INSERT_UNRESOLVED"
-                    }
-                    NotEntered::Cycle => "INSERT_CYCLE",
-                    NotEntered::TooDeep => "INSERT_TOO_DEEP",
-                    NotEntered::Tilted => "INSERT",
-                    NotEntered::BudgetExhausted => "INSERT_BUDGET_EXHAUSTED",
-                };
-                bump(&mut self.not_measured, key);
-                return;
-            }
-        };
-        self.walk(&block.entities, &inner);
-        self.blocks.leave();
+        // Each cell of a grid is a placement of the block, counted as one;
+        // a reference that cannot be entered is counted once.
+        let mut any = false;
+        for (column, row) in cells(i) {
+            any = true;
+            let (block, inner) = match self.blocks.enter(self.tables, &i.block_name, |block| {
+                at.then(i, block.base_point, column, row)
+            }) {
+                Ok(entered) => entered,
+                Err(why) => {
+                    let key = match why {
+                        NotEntered::Absent | NotEntered::Unresolved | NotEntered::Undefined => {
+                            "INSERT_UNRESOLVED"
+                        }
+                        NotEntered::Cycle => "INSERT_CYCLE",
+                        NotEntered::TooDeep => "INSERT_TOO_DEEP",
+                        NotEntered::Tilted => "INSERT",
+                        NotEntered::BudgetExhausted => "INSERT_BUDGET_EXHAUSTED",
+                    };
+                    bump(&mut self.not_measured, key);
+                    return;
+                }
+            };
+            self.walk(&block.entities, &inner);
+            self.blocks.leave();
+        }
+        if !any {
+            bump(&mut self.not_measured, "INSERT_EMPTY_GRID");
+        }
     }
 
     /// `length` (drawing units) in whole micrometres, when the unit is known

@@ -7,7 +7,21 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `NotSearchedReason::BlockReferenceEmptyGrid`: a block reference whose grid has no cell places its block nowhere.
+
 ### Changed
+
+- A block reference with a grid (a multiple insert, `InsertEntity::array`) is followed in every cell by each
+  answer that follows references, not only by `contours`: the extent of a drawing reaches every cell and
+  measures each cell's insertion point; the signature counts the block once for each cell; `hit_test` finds
+  what each cell draws and takes each cell's insertion point for an anchor of the reference; `relate`
+  relates what each cell draws. A reference that cannot be followed is named once however many cells it
+  has, and a grid with no cell is named (`INSERT_EMPTY_GRID` in the extent's `not_measured` and the
+  signature's, `BlockReferenceEmptyGrid` in `not_searched`). **The same drawing gives a different answer**:
+  one with a multiple insert had its first placement only. Needs the `uncad-model` release that adds
+  `InsertEntity::array`.
 
 - `contours` (and the contour totals of the summary) now follows block references: each instance of a
   block draws its lines, circles, arcs and polylines where the reference places them -- through nested

@@ -20,7 +20,7 @@ use crate::geometry::{
     distance, distance_to_arc, distance_to_segments, flat_plane, world_angle, world_xy, xy,
 };
 use crate::hit_test::{spaces, NotSearched, NotSearchedReason};
-use crate::limits::{NotEntered, Walk};
+use crate::limits::{cells, NotEntered, Walk};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uncad_model::bulge::{self, Segment};
@@ -631,13 +631,28 @@ impl Collect<'_> {
             }
         }
         match entity {
-            Entity::Insert(insert) => self.follow(
-                entity,
-                &insert.block_name,
-                |base| insert.world_transform(base),
-                t,
-                via,
-            ),
+            // Each cell of a grid is a placement of the block; the reference
+            // is noted once however many cells it has.
+            Entity::Insert(insert) => {
+                self.note_external(entity, &insert.block_name, via);
+                let mut any = false;
+                for (column, row) in cells(insert) {
+                    any = true;
+                    let placed = self.place(
+                        entity,
+                        &insert.block_name,
+                        |base| insert.world_transform_at(base, column, row),
+                        t,
+                        via,
+                    );
+                    if !placed {
+                        break;
+                    }
+                }
+                if !any {
+                    self.not_searched(entity, via, NotSearchedReason::BlockReferenceEmptyGrid);
+                }
+            }
             Entity::AcadTable(table) => self.follow(
                 entity,
                 &table.block_name,
@@ -706,6 +721,13 @@ impl Collect<'_> {
         t: &Affine2,
         via: &mut Vec<EntityId>,
     ) {
+        self.note_external(owner, block_name, via);
+        self.place(owner, block_name, own, t, via);
+    }
+
+    /// Notes the block `block_name` names when it stands for another
+    /// drawing, with the reference `owner` that places it.
+    fn note_external(&mut self, owner: &Entity, block_name: &Ref<String>, via: &[EntityId]) {
         let id = owner.common().id;
         if let Ref::Resolved(name) = block_name {
             if let Some(block) = self.db.tables.block_records.get(name) {
@@ -722,11 +744,25 @@ impl Collect<'_> {
                         .inserts
                         .push(PlacedReference {
                             id,
-                            via: via.clone(),
+                            via: via.to_vec(),
                         });
                 }
             }
         }
+    }
+
+    /// Collects what the block `block_name` names draws, placed through its
+    /// own transform and then `t`; `false` when it cannot be entered, the
+    /// reason noted.
+    fn place(
+        &mut self,
+        owner: &Entity,
+        block_name: &Ref<String>,
+        own: impl FnOnce(Point3D) -> Option<Affine2>,
+        t: &Affine2,
+        via: &mut Vec<EntityId>,
+    ) -> bool {
+        let id = owner.common().id;
         let (block, own) = match self
             .blocks
             .enter(&self.db.tables, block_name, |b| own(b.base_point))
@@ -742,7 +778,8 @@ impl Collect<'_> {
                     NotEntered::Tilted => NotSearchedReason::NonSimilarPlacement,
                     NotEntered::BudgetExhausted => NotSearchedReason::BlockReferenceBudgetExhausted,
                 };
-                return self.not_searched(owner, via, reason);
+                self.not_searched(owner, via, reason);
+                return false;
             }
         };
         let placed = own.then(t);
@@ -750,6 +787,7 @@ impl Collect<'_> {
         self.entities(&block.entities, &placed, via);
         via.pop();
         self.blocks.leave();
+        true
     }
 }
 

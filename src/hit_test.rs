@@ -36,7 +36,7 @@ use uncad_model::model::{
 };
 use uncad_model::{Affine2, CadDatabase, Point2D, Point3D, PolylineVertex};
 
-use crate::limits::{NotEntered, Walk};
+use crate::limits::{cells, NotEntered, Walk};
 
 /// One entity at the point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -122,6 +122,8 @@ pub enum NotSearchedReason {
     /// The block would take the search past the ten million entities it
     /// meets inside expanded blocks in one call.
     BlockReferenceBudgetExhausted,
+    /// The INSERT's grid has no cell, so it places its block nowhere.
+    BlockReferenceEmptyGrid,
     /// The file does not define the curve to measure: a SPLINE stored only
     /// by the points it passes through, or whose control points, knots and
     /// weights do not make a curve; a LEADER whose path is a spline through
@@ -860,13 +862,56 @@ impl Search<'_> {
                 Where::Sheet => {}
             }
             match entity {
-                Entity::Insert(insert) => self.follow(
-                    entity,
-                    &insert.block_name,
-                    |base| insert.world_transform(base),
-                    t,
-                    via,
-                ),
+                // Each cell of a grid is a placement of the block, and its
+                // own insertion point an anchor.
+                Entity::Insert(insert) => {
+                    let mut any = false;
+                    for (column, row) in cells(insert) {
+                        any = true;
+                        if (column, row) != (0, 0) {
+                            let offset = insert.cell_offset(column, row);
+                            let anchor = distance(
+                                self.point,
+                                t.apply(Point2D {
+                                    x: insert.insertion_point.x + offset.x,
+                                    y: insert.insertion_point.y + offset.y,
+                                }),
+                            );
+                            if anchor <= self.tolerance {
+                                self.hits.push(Hit {
+                                    id: common.id,
+                                    entity_type: entity.type_name().to_string(),
+                                    distance: anchor,
+                                    anchored: true,
+                                    confidence: common.confidence,
+                                    invisible,
+                                    via: via.clone(),
+                                    space: space.clone(),
+                                    within: None,
+                                });
+                            }
+                        }
+                        let followed = self.follow(
+                            entity,
+                            &insert.block_name,
+                            |base| insert.world_transform_at(base, column, row),
+                            t,
+                            via,
+                        );
+                        if !followed {
+                            break;
+                        }
+                    }
+                    if !any {
+                        self.not_searched.push(NotSearched {
+                            id: common.id,
+                            entity_type: entity.type_name().to_string(),
+                            via: via.clone(),
+                            reason: NotSearchedReason::BlockReferenceEmptyGrid,
+                            space: space.clone(),
+                        });
+                    }
+                }
                 // A table's block holds what the table draws, placed as
                 // though based at the origin -- where the renderer places it.
                 Entity::AcadTable(table) => {
@@ -884,7 +929,7 @@ impl Search<'_> {
                         },
                         t,
                         via,
-                    )
+                    );
                 }
                 _ => {}
             }
@@ -1036,7 +1081,7 @@ impl Search<'_> {
         own: impl FnOnce(Point3D) -> Option<Affine2>,
         t: &Affine2,
         via: &mut Vec<EntityId>,
-    ) {
+    ) -> bool {
         let common = owner.common();
         let space = self.space_of(common.id, via);
         let not = |reason| NotSearched {
@@ -1063,7 +1108,7 @@ impl Search<'_> {
                     NotEntered::Tilted => NotSearchedReason::NonSimilarPlacement,
                     NotEntered::BudgetExhausted => NotSearchedReason::BlockReferenceBudgetExhausted,
                 }));
-                return;
+                return false;
             }
         };
         let placed = own.then(t);
@@ -1074,6 +1119,7 @@ impl Search<'_> {
         via.pop();
         self.blocks.leave();
         self.hidden_refs -= hides;
+        true
     }
 }
 

@@ -37,7 +37,7 @@
 //! not drawn and is not read.
 
 use crate::hit_test::spaces;
-use crate::limits::{NotEntered, Walk};
+use crate::limits::{cells, NotEntered, Walk};
 use crate::outline::{self, is_sane, Part, Why};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
@@ -539,12 +539,8 @@ impl<'a> Collector<'a> {
     /// budget, which the cells spend as they go: either way the cells after
     /// the first one left out are left out.
     fn insert(&mut self, insert: &InsertEntity, at: &Placement, layer: &str) {
-        let cells: Box<dyn Iterator<Item = (u32, u32)>> = match &insert.array {
-            Some(grid) => Box::new(grid.cells()),
-            None => Box::new(std::iter::once((0, 0))),
-        };
         let mut any = false;
-        for (column, row) in cells {
+        for (column, row) in cells(insert) {
             any = true;
             if !self.insert_cell(insert, at, layer, column, row) {
                 return;
