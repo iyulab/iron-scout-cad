@@ -17,16 +17,31 @@
 //! vertex) is left out and counted.
 //!
 //! This says nothing about what an outline is for: which layer cuts and which
-//! folds is not read here. It reads the model space's own lines, arcs, circles
-//! and polylines in the plan -- the height of a point is not read, so two ends
-//! at different heights above the same place are joined; what it does not read
-//! is counted in [`Contours::not_read`].
+//! folds is not read here. It reads the model space's lines, arcs, circles and
+//! polylines in the plan -- the height of a point is not read, so two ends at
+//! different heights above the same place are joined -- and those a block
+//! reference draws, each instance of the block placed where the reference puts
+//! it (a block's entity on layer `0` takes the layer of the reference). A
+//! reference is followed only where the placement keeps a circle a circle: one
+//! that scales the axes differently, sits on a tilted plane, names a block the
+//! drawing does not hold, contains itself, sits inside too many others or
+//! would take the walk past its budget is left out and counted under the
+//! reason. What it does not read is counted in [`Contours::not_read`].
+//!
+//! The model keeps one placement of an array of block references and states
+//! no clip and no dynamic variation, so none of the three is told here: the
+//! other placements of an array are not in the answer, and a clipped block
+//! gives all its curves. An entity a block marks invisible (a hidden state of
+//! a dynamic block) is not drawn and is not read.
 
 use crate::hit_test::spaces;
+use crate::limits::{NotEntered, Walk};
 use crate::outline::{self, is_sane, Part, Why};
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
-use uncad_model::model::{Entity, EntityId, Point2D, Ref};
+use uncad_model::model::{Entity, EntityId, InsertEntity, Point2D, Ref};
+use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase};
 
 /// How a group of joined pieces closes.
@@ -88,8 +103,17 @@ pub struct Contours {
     pub open: u32,
     /// By the first entity of each group.
     pub components: Vec<Contour>,
-    /// What the drawing holds that is not read here, by name and how many:
-    /// `INSERT` (its block is not entered), `ELLIPSE`, `SPLINE` and
+    /// What the drawing holds that is not read here, by name and how many --
+    /// an entity of a block once for each instance of the block:
+    /// block references not followed (`INSERT_UNRESOLVED`: the drawing holds
+    /// no block of that name; `INSERT_CYCLE`: the block contains itself;
+    /// `INSERT_TOO_DEEP`: inside 20 others; `INSERT_BUDGET_EXHAUSTED`: its
+    /// block would take the walk past ten million entities met inside expanded
+    /// blocks; `INSERT_TILTED_PLANE`: placed on a plane tilted out of the
+    /// world's; `INSERT_NON_UNIFORM_SCALE`: its placement scales the axes
+    /// differently, which turns a circle into an ellipse),
+    /// `INVISIBLE_IN_BLOCK` (an entity of a block that the file marks
+    /// invisible), `ELLIPSE`, `SPLINE` and
     /// `POLYLINE_3D` (not straight or circular pieces in the plan),
     /// `TILTED_PLANE` (an entity whose plane is not the world's plan),
     /// `ARC_SWEEP_UNDEFINED` (an arc whose two angles are equal),
@@ -172,6 +196,7 @@ const MAX_PIECES: usize = crate::wl::MAX_TOTAL_PIECES;
 const EPS_MM: f64 = 1e-9;
 
 struct Piece {
+    /// The index of the piece's owner (`Collected::owners`).
     entity: usize,
     /// The two ends in the plan, in millimetres; `None` for a piece that
     /// closes on itself (a circle, an arc whose ends meet).
@@ -191,7 +216,7 @@ enum Placed {
     Degenerate,
 }
 
-fn place(entity: usize, ends: [[f64; 2]; 2], mid: [f64; 2], length_mm: f64, gap_mm: f64) -> Placed {
+fn place(ends: [[f64; 2]; 2], mid: [f64; 2], length_mm: f64, gap_mm: f64) -> Placed {
     if !(is_sane(ends[0])
         && is_sane(ends[1])
         && is_sane(mid)
@@ -209,34 +234,30 @@ fn place(entity: usize, ends: [[f64; 2]; 2], mid: [f64; 2], length_mm: f64, gap_
             return Placed::Degenerate;
         }
         return Placed::Piece(Piece {
-            entity,
+            entity: 0,
             ends: None,
             mid,
             length_mm,
         });
     }
     Placed::Piece(Piece {
-        entity,
+        entity: 0,
         ends: Some(ends),
         mid,
         length_mm,
     })
 }
 
-/// A part of an outline as a piece of the contour search, in millimetres.
-fn place_part(entity: usize, part: &Part, k: f64, gap_mm: f64) -> Placed {
+/// A part of an outline as a piece of the contour search, in millimetres;
+/// `scale` is the factor the placement scales every length by (a part's radius
+/// is the one its entity states).
+fn place_part(part: &Part, k: f64, scale: f64, gap_mm: f64) -> Placed {
     let mm = |p: Point2D| [p.x * k, p.y * k];
     match *part {
         Part::Line { from, to } => {
             let (a, b) = (mm(from), mm(to));
             let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
-            place(
-                entity,
-                [a, b],
-                mid,
-                (b[0] - a[0]).hypot(b[1] - a[1]),
-                gap_mm,
-            )
+            place([a, b], mid, (b[0] - a[0]).hypot(b[1] - a[1]), gap_mm)
         }
         Part::Arc {
             radius,
@@ -252,19 +273,18 @@ fn place_part(entity: usize, part: &Part, k: f64, gap_mm: f64) -> Placed {
                 return Placed::Unplaceable;
             };
             place(
-                entity,
                 [mm(p), mm(q)],
                 mm(m),
-                radius * sweep.abs() * k,
+                radius * sweep.abs() * scale * k,
                 gap_mm,
             )
         }
         Part::Circle { centre, radius, .. } => {
             let at = mm(centre);
-            let length = std::f64::consts::TAU * radius * k;
+            let length = std::f64::consts::TAU * radius * scale * k;
             if length.is_finite() && is_sane(at) {
                 Placed::Piece(Piece {
-                    entity,
+                    entity: 0,
                     ends: None,
                     mid: at,
                     length_mm: length,
@@ -327,6 +347,7 @@ fn contours_within(
     let Collected {
         owners,
         pieces,
+        seen,
         mut not_read,
     } = collect_pieces(db, k, gap_mm);
 
@@ -342,8 +363,8 @@ fn contours_within(
             not_read,
         })
     };
-    if pieces.len() > MAX_PIECES {
-        return untold("PIECE_LIMIT", pieces.len(), not_read);
+    if seen > MAX_PIECES {
+        return untold("PIECE_LIMIT", seen, not_read);
     }
 
     // The ends that can be joined, with the piece each belongs to.
@@ -379,34 +400,201 @@ fn contours_within(
     })
 }
 
-/// What collecting the pieces found: each piece's owner, the pieces, and the
-/// kinds left out with how many of each.
+/// What collecting the pieces found: each piece's owner, the pieces, how many
+/// there were, and the kinds left out with how many of each.
 struct Collected {
+    /// The entity of the model space that draws a piece and the layer the
+    /// piece is on -- a block reference gives one owner for each layer its
+    /// block draws on.
     owners: Vec<(EntityId, String)>,
+    /// The pieces, up to one past [`MAX_PIECES`].
     pieces: Vec<Piece>,
+    /// How many pieces there were, whether or not they were kept.
+    seen: usize,
     not_read: BTreeMap<String, u32>,
 }
 
-/// The pieces of model space's lines, circles, arcs and polylines, placed in
-/// millimetres, with the owner of each; what was left out is counted under
-/// what it was left out for.
+/// Where a block's own coordinates go in the world's plan, and the one factor
+/// that placement scales every length by.
+#[derive(Clone, Copy)]
+struct Placement {
+    map: Affine2,
+    scale: f64,
+}
+
+/// The factor `m` scales every length by, when it is the same in every
+/// direction (a mirror is: lengths keep what they were scaled to); `None`
+/// when the axes are scaled differently or sheared, or the map flattens the
+/// plane.
+fn uniform_scale(m: &Affine2) -> Option<f64> {
+    const TOLERANCE: f64 = 1e-9;
+    let (la, lb) = (m.a.hypot(m.b), m.c.hypot(m.d));
+    let dot = m.a * m.c + m.b * m.d;
+    let same = la.is_finite()
+        && lb.is_finite()
+        && la > 0.0
+        && (la - lb).abs() <= TOLERANCE * la.max(lb)
+        && dot.abs() <= TOLERANCE * la * lb;
+    same.then_some(la)
+}
+
+fn layer_of(e: &Entity) -> &str {
+    match &e.common().layer {
+        Ref::Resolved(name) | Ref::Unresolved(name) => name,
+        Ref::Absent => "",
+    }
+}
+
+/// One walk over the model space: the pieces of its lines, circles, arcs and
+/// polylines and of those every block reference draws, placed in millimetres.
+struct Collector<'a> {
+    tables: &'a Tables,
+    k: f64,
+    gap_mm: f64,
+    walk: Walk,
+    /// The layer each open reference is effectively on, outermost first: an
+    /// entity of the block on layer `0` takes it as its own.
+    reference_layers: Vec<String>,
+    /// The model space's entity being walked and the owner each layer its
+    /// pieces are on has been given.
+    top: Option<(EntityId, BTreeMap<String, usize>)>,
+    out: Collected,
+}
+
+impl<'a> Collector<'a> {
+    fn skip(&mut self, name: &str) {
+        *self.out.not_read.entry(name.to_string()).or_insert(0) += 1;
+    }
+
+    /// The owner of a piece on `layer` in the model-space entity being walked.
+    fn owner(&mut self, layer: &str) -> usize {
+        let (id, by_layer) = self.top.as_mut().expect("an entity is being walked");
+        if let Some(owner) = by_layer.get(layer) {
+            return *owner;
+        }
+        let owner = self.out.owners.len();
+        self.out.owners.push((*id, layer.to_string()));
+        by_layer.insert(layer.to_string(), owner);
+        owner
+    }
+
+    /// A piece placed, or counted under what it was left out for. Pieces past
+    /// the limit are counted and not kept.
+    fn keep(&mut self, placed: Placed, layer: &str) {
+        match placed {
+            Placed::Piece(mut piece) => {
+                self.out.seen += 1;
+                if self.out.pieces.len() <= MAX_PIECES {
+                    piece.entity = self.owner(layer);
+                    self.out.pieces.push(piece);
+                }
+            }
+            Placed::Unplaceable => self.skip("UNPLACEABLE"),
+            Placed::Degenerate => self.skip("DEGENERATE"),
+        }
+    }
+
+    /// The pieces `e` draws -- those of a block reference included, instance
+    /// by instance -- placed through `at`.
+    fn entity(&mut self, e: &Entity, at: &Placement) {
+        let own = layer_of(e);
+        let layer = match self.reference_layers.last() {
+            Some(reference) if own == "0" => reference.clone(),
+            _ => own.to_string(),
+        };
+        match e {
+            Entity::Line(_)
+            | Entity::Circle(_)
+            | Entity::Arc(_)
+            | Entity::LwPolyline(_)
+            | Entity::Polyline2D(_) => match outline::parts(e, &at.map) {
+                Ok(parts) => {
+                    for part in &parts {
+                        let placed = place_part(part, self.k, at.scale, self.gap_mm);
+                        self.keep(placed, &layer);
+                    }
+                }
+                Err(Why::Tilted) => self.skip("TILTED_PLANE"),
+                // An arc with equal angles has no ends to join.
+                Err(Why::SweepUndefined) => self.skip("ARC_SWEEP_UNDEFINED"),
+                Err(Why::BadRadius) => self.skip("UNPLACEABLE"),
+            },
+            Entity::Insert(insert) => self.insert(insert, at, &layer),
+            Entity::Polyline3D(_) => self.skip("POLYLINE_3D"),
+            Entity::Ellipse(_) => self.skip("ELLIPSE"),
+            Entity::Spline(_) => self.skip("SPLINE"),
+            _ => {}
+        }
+    }
+
+    /// Walks the block `insert` places, each of its entities through the
+    /// reference's placement and then `at`; counts the reference under the
+    /// reason when it cannot.
+    fn insert(&mut self, insert: &InsertEntity, at: &Placement, layer: &str) {
+        let tables: &'a Tables = self.tables;
+        let differs = Cell::new(false);
+        let entered = self.walk.enter(tables, &insert.block_name, |block| {
+            let map = insert.world_transform(block.base_point)?.then(&at.map);
+            match uniform_scale(&map) {
+                Some(scale) => Some(Placement { map, scale }),
+                None => {
+                    differs.set(true);
+                    None
+                }
+            }
+        });
+        let (block, inner) = match entered {
+            Ok(entered) => entered,
+            Err(why) => {
+                self.skip(match why {
+                    NotEntered::Absent | NotEntered::Unresolved | NotEntered::Undefined => {
+                        "INSERT_UNRESOLVED"
+                    }
+                    NotEntered::Cycle => "INSERT_CYCLE",
+                    NotEntered::TooDeep => "INSERT_TOO_DEEP",
+                    NotEntered::Tilted if differs.get() => "INSERT_NON_UNIFORM_SCALE",
+                    NotEntered::Tilted => "INSERT_TILTED_PLANE",
+                    NotEntered::BudgetExhausted => "INSERT_BUDGET_EXHAUSTED",
+                });
+                return;
+            }
+        };
+        self.reference_layers.push(layer.to_string());
+        for inner_entity in &block.entities {
+            if inner_entity.common().invisible {
+                self.skip("INVISIBLE_IN_BLOCK");
+            } else {
+                self.entity(inner_entity, &inner);
+            }
+        }
+        self.reference_layers.pop();
+        self.walk.leave();
+    }
+}
+
+/// The pieces of model space's lines, circles, arcs and polylines, and of the
+/// blocks its references draw, placed in millimetres, with the owner of each;
+/// what was left out is counted under what it was left out for.
 fn collect_pieces(db: &CadDatabase, k: f64, gap_mm: f64) -> Collected {
     let spaces = spaces(db);
-    let mut owners: Vec<(EntityId, String)> = Vec::new();
-    let mut pieces: Vec<Piece> = Vec::new();
-    let mut not_read: BTreeMap<String, u32> = BTreeMap::new();
-    let skip = |name: &str, not_read: &mut BTreeMap<String, u32>| {
-        *not_read.entry(name.to_string()).or_insert(0) += 1;
+    let mut collector = Collector {
+        tables: &db.tables,
+        k,
+        gap_mm,
+        walk: Walk::default(),
+        reference_layers: Vec::new(),
+        top: None,
+        out: Collected {
+            owners: Vec::new(),
+            pieces: Vec::new(),
+            seen: 0,
+            not_read: BTreeMap::new(),
+        },
     };
-    // A piece placed, or counted under what it was left out for.
-    let keep = |placed: Placed, mine: &mut Vec<Piece>, not_read: &mut BTreeMap<String, u32>| {
-        match placed {
-            Placed::Piece(p) => mine.push(p),
-            Placed::Unplaceable => skip("UNPLACEABLE", not_read),
-            Placed::Degenerate => skip("DEGENERATE", not_read),
-        }
+    let top = Placement {
+        map: Affine2::IDENTITY,
+        scale: 1.0,
     };
-
     for e in &db.entities {
         let id = e.common().id;
         if spaces
@@ -415,44 +603,10 @@ fn collect_pieces(db: &CadDatabase, k: f64, gap_mm: f64) -> Collected {
         {
             continue;
         }
-        let mut mine: Vec<Piece> = Vec::new();
-        let owner = owners.len();
-        match e {
-            Entity::Line(_)
-            | Entity::Circle(_)
-            | Entity::Arc(_)
-            | Entity::LwPolyline(_)
-            | Entity::Polyline2D(_) => match outline::parts(e, &Affine2::IDENTITY) {
-                Ok(parts) => {
-                    for part in &parts {
-                        keep(place_part(owner, part, k, gap_mm), &mut mine, &mut not_read);
-                    }
-                }
-                Err(Why::Tilted) => skip("TILTED_PLANE", &mut not_read),
-                // An arc with equal angles has no ends to join.
-                Err(Why::SweepUndefined) => skip("ARC_SWEEP_UNDEFINED", &mut not_read),
-                Err(Why::BadRadius) => skip("UNPLACEABLE", &mut not_read),
-            },
-            Entity::Polyline3D(_) => skip("POLYLINE_3D", &mut not_read),
-            Entity::Insert(_) => skip("INSERT", &mut not_read),
-            Entity::Ellipse(_) => skip("ELLIPSE", &mut not_read),
-            Entity::Spline(_) => skip("SPLINE", &mut not_read),
-            _ => {}
-        }
-        if !mine.is_empty() {
-            let layer = match &e.common().layer {
-                Ref::Resolved(name) | Ref::Unresolved(name) => name.clone(),
-                Ref::Absent => String::new(),
-            };
-            owners.push((id, layer));
-            pieces.extend(mine);
-        }
+        collector.top = Some((id, BTreeMap::new()));
+        collector.entity(e, &top);
     }
-    Collected {
-        owners,
-        pieces,
-        not_read,
-    }
+    collector.out
 }
 
 fn find(parent: &mut [usize], mut a: usize) -> usize {

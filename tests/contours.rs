@@ -151,11 +151,27 @@ fn the_summary_carries_the_totals_and_a_drawing_without_a_unit_has_none() {
 }
 
 #[test]
-fn what_is_not_read_is_counted_by_name() {
-    // G1 has a title block reference: its block is not entered.
+fn a_title_block_reference_is_followed_into_its_block() {
+    // G1 has a title block reference (id 297): its block's lines are read,
+    // placed where the reference puts them, and the reference owns them.
     let g1: CadDatabase = serde_json::from_str(include_str!("golden/g1.expected.json")).unwrap();
     let c = contours(&g1, JOIN_UM).unwrap();
-    assert_eq!(c.not_read.get("INSERT"), Some(&1));
+    assert!(
+        c.not_read.keys().all(|name| !name.starts_with("INSERT")),
+        "{:?}",
+        c.not_read
+    );
+    let owned = c
+        .components
+        .iter()
+        .filter(|g| {
+            serde_json::to_value(&g.entities)
+                .unwrap()
+                .to_string()
+                .contains("\"297\"")
+        })
+        .count();
+    assert!(owned > 0, "{:?}", c.components);
 }
 
 // ---- what an independent read of the grouping drew from degenerate drawings ----

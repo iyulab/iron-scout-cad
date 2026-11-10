@@ -7,6 +7,24 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Changed
+
+- `contours` (and the contour totals of the summary) now follows block references: each instance of a
+  block draws its lines, circles, arcs and polylines where the reference places them -- through nested
+  references, with a mirror, and with a block's entity on layer `0` taking the layer of its reference. A
+  group's `entities` names the model-space entity that draws a piece, so a reference owns the pieces its
+  block draws, listed once however many layers they sit on. **The same drawing gives a different answer**:
+  a drawing that draws with blocks now has the outlines its blocks draw in `loops`, `branched`, `open` and
+  the lengths. A reference that cannot be placed exactly is left out and counted in `not_read` under the
+  reason, in place of the single `INSERT` count it had: `INSERT_UNRESOLVED` (no such block),
+  `INSERT_CYCLE`, `INSERT_TOO_DEEP` (inside 20 others), `INSERT_BUDGET_EXHAUSTED` (past ten million
+  entities met inside expanded blocks), `INSERT_TILTED_PLANE` and `INSERT_NON_UNIFORM_SCALE` (a placement
+  that scales the axes differently turns a circle into an ellipse). An entity a block marks invisible (a
+  hidden state of a dynamic block) is not read and is counted as `INVISIBLE_IN_BLOCK`. `PIECE_LIMIT` now
+  counts every piece met, kept or not, and bounds the memory a drawing of many instances can take. The
+  model keeps one placement of an array of references and states no clip and no dynamic variation, so the
+  other placements of an array are not in the answer and a clipped block gives all its curves.
+
 ## [0.16.0] - 2026-11-05
 
 ### Added
