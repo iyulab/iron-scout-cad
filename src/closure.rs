@@ -28,11 +28,13 @@
 //! would take the walk past its budget is left out and counted under the
 //! reason. What it does not read is counted in [`Contours::not_read`].
 //!
-//! The model keeps one placement of an array of block references and states
-//! no clip and no dynamic variation, so none of the three is told here: the
-//! other placements of an array are not in the answer, and a clipped block
-//! gives all its curves. An entity a block marks invisible (a hidden state of
-//! a dynamic block) is not drawn and is not read.
+//! A reference with a grid (a multiple insert) draws its block in every cell
+//! of it, the spacing turned with the reference and not scaled by it; a
+//! drawing whose reader does not state the grid holds one placement, which
+//! is all that can be read of it. The model states no clip and no dynamic
+//! variation, so neither is told here: a clipped block gives all its curves.
+//! An entity a block marks invisible (a hidden state of a dynamic block) is
+//! not drawn and is not read.
 
 use crate::hit_test::spaces;
 use crate::limits::{NotEntered, Walk};
@@ -105,13 +107,15 @@ pub struct Contours {
     pub components: Vec<Contour>,
     /// What the drawing holds that is not read here, by name and how many --
     /// an entity of a block once for each instance of the block:
-    /// block references not followed (`INSERT_UNRESOLVED`: the drawing holds
+    /// block references not followed, each counted once however many cells its
+    /// grid has (`INSERT_UNRESOLVED`: the drawing holds
     /// no block of that name; `INSERT_CYCLE`: the block contains itself;
     /// `INSERT_TOO_DEEP`: inside 20 others; `INSERT_BUDGET_EXHAUSTED`: its
     /// block would take the walk past ten million entities met inside expanded
     /// blocks; `INSERT_TILTED_PLANE`: placed on a plane tilted out of the
     /// world's; `INSERT_NON_UNIFORM_SCALE`: its placement scales the axes
-    /// differently, which turns a circle into an ellipse),
+    /// differently, which turns a circle into an ellipse; `INSERT_EMPTY_GRID`:
+    /// a grid with no cell),
     /// `INVISIBLE_IN_BLOCK` (an entity of a block that the file marks
     /// invisible), `ELLIPSE`, `SPLINE` and
     /// `POLYLINE_3D` (not straight or circular pieces in the plan),
@@ -527,14 +531,47 @@ impl<'a> Collector<'a> {
         }
     }
 
-    /// Walks the block `insert` places, each of its entities through the
-    /// reference's placement and then `at`; counts the reference under the
-    /// reason when it cannot.
+    /// Walks the block `insert` places -- once for each cell of its grid, if
+    /// it has one -- each of its entities through the reference's placement
+    /// and then `at`; counts the reference under the reason when it cannot,
+    /// once whatever the grid. A reason that holds for one cell holds for
+    /// the rest (the block, the plane, the scale, the depth), except the
+    /// budget, which the cells spend as they go: either way the cells after
+    /// the first one left out are left out.
     fn insert(&mut self, insert: &InsertEntity, at: &Placement, layer: &str) {
+        let cells: Box<dyn Iterator<Item = (u32, u32)>> = match &insert.array {
+            Some(grid) => Box::new(grid.cells()),
+            None => Box::new(std::iter::once((0, 0))),
+        };
+        let mut any = false;
+        for (column, row) in cells {
+            any = true;
+            if !self.insert_cell(insert, at, layer, column, row) {
+                return;
+            }
+        }
+        if !any {
+            self.skip("INSERT_EMPTY_GRID");
+        }
+    }
+
+    /// One placement of the block `insert` makes: the cell at `column` and
+    /// `row`. `false` when the block was not entered, the reference counted
+    /// under the reason.
+    fn insert_cell(
+        &mut self,
+        insert: &InsertEntity,
+        at: &Placement,
+        layer: &str,
+        column: u32,
+        row: u32,
+    ) -> bool {
         let tables: &'a Tables = self.tables;
         let differs = Cell::new(false);
         let entered = self.walk.enter(tables, &insert.block_name, |block| {
-            let map = insert.world_transform(block.base_point)?.then(&at.map);
+            let map = insert
+                .world_transform_at(block.base_point, column, row)?
+                .then(&at.map);
             match uniform_scale(&map) {
                 Some(scale) => Some(Placement { map, scale }),
                 None => {
@@ -556,7 +593,7 @@ impl<'a> Collector<'a> {
                     NotEntered::Tilted => "INSERT_TILTED_PLANE",
                     NotEntered::BudgetExhausted => "INSERT_BUDGET_EXHAUSTED",
                 });
-                return;
+                return false;
             }
         };
         self.reference_layers.push(layer.to_string());
@@ -569,6 +606,7 @@ impl<'a> Collector<'a> {
         }
         self.reference_layers.pop();
         self.walk.leave();
+        true
     }
 }
 

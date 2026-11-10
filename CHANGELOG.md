@@ -21,9 +21,12 @@ bumps the minor version.
   entities met inside expanded blocks), `INSERT_TILTED_PLANE` and `INSERT_NON_UNIFORM_SCALE` (a placement
   that scales the axes differently turns a circle into an ellipse). An entity a block marks invisible (a
   hidden state of a dynamic block) is not read and is counted as `INVISIBLE_IN_BLOCK`. `PIECE_LIMIT` now
-  counts every piece met, kept or not, and bounds the memory a drawing of many instances can take. The
-  model keeps one placement of an array of references and states no clip and no dynamic variation, so the
-  other placements of an array are not in the answer and a clipped block gives all its curves.
+  counts every piece met, kept or not, and bounds the memory a drawing of many instances can take. A
+  reference with a grid (a multiple insert, `InsertEntity::array`) draws its block in every cell, the
+  spacing turned with the reference and not scaled by it; cells on one spot are one placement, and a
+  reference that cannot be followed is counted once however many cells it has (`INSERT_EMPTY_GRID` counts a
+  grid with no cell). The model states no clip and no dynamic variation, so a clipped block gives all its
+  curves. Needs the `uncad-model` release that adds `InsertEntity::array`.
 
 ## [0.16.0] - 2026-11-05
 

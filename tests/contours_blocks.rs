@@ -366,3 +366,101 @@ fn the_answer_does_not_depend_on_the_order_of_the_references() {
         forward
     );
 }
+
+/// A reference with a grid: the grid as the file states it.
+fn with_grid(
+    r: &Reference,
+    columns: u32,
+    rows: u32,
+    column_spacing: f64,
+    row_spacing: f64,
+) -> Value {
+    let mut v = r.json();
+    v["array"] = json!({
+        "columns": columns, "rows": rows,
+        "column_spacing": column_spacing, "row_spacing": row_spacing,
+    });
+    v
+}
+
+/// A multiple insert places its block in every cell of its grid: a square
+/// referenced as three columns by two rows is six closed outlines, each as
+/// long as one square, all owned by the one reference.
+#[test]
+fn a_grid_of_squares_is_a_loop_in_every_cell() {
+    let r = reference(100, "CUT", "SQ", [0.0, 0.0]);
+    let db = drawing(
+        vec![with_grid(&r, 3, 2, 20.0, 30.0)],
+        vec![("SQ", square(1, "0"))],
+    );
+    let c = contours(&db, JOIN_UM).unwrap();
+    assert_eq!(counts(&c), (6, 0, 0), "{:?}", c.components);
+    assert!(c.not_read.is_empty(), "{:?}", c.not_read);
+    assert!(c
+        .components
+        .iter()
+        .all(|g| close(g.length_mm, 40.0) && g.pieces == 4 && ids(g) == json!(["100"])));
+}
+
+/// The grid turns with the reference and is not stretched by it: a line of
+/// length 10 scaled by 2 and turned a quarter is 20 long and runs up; the
+/// second cell, 20 along the turned axis, starts where the first ends, so the
+/// two pieces join. A grid scaled with the reference would put them 20 apart.
+#[test]
+fn the_spacing_of_a_grid_is_turned_with_the_reference_and_not_scaled() {
+    let mut r = reference(100, "CUT", "BAR", [0.0, 0.0]);
+    r.scale = [2.0, 2.0];
+    r.rotation = PI / 2.0;
+    let db = drawing(
+        vec![with_grid(&r, 2, 1, 20.0, 0.0)],
+        vec![("BAR", vec![line(1, "0", [0.0, 0.0], [10.0, 0.0])])],
+    );
+    let c = contours(&db, JOIN_UM).unwrap();
+    assert_eq!(counts(&c), (0, 0, 1), "{:?}", c.components);
+    let g = &c.components[0];
+    assert_eq!(g.pieces, 2);
+    assert!(close(g.length_mm, 40.0), "{}", g.length_mm);
+}
+
+/// Cells on one spot are one placement: a spacing of zero does not draw the
+/// same square again and again.
+#[test]
+fn cells_that_coincide_are_one_placement() {
+    let r = reference(100, "CUT", "SQ", [0.0, 0.0]);
+    let db = drawing(
+        vec![with_grid(&r, 3, 3, 0.0, 0.0)],
+        vec![("SQ", square(1, "0"))],
+    );
+    let c = contours(&db, JOIN_UM).unwrap();
+    assert_eq!(counts(&c), (1, 0, 0), "{:?}", c.components);
+    assert!(close(c.components[0].length_mm, 40.0));
+}
+
+/// A reference that cannot be followed is counted once, not once per cell;
+/// and a grid with no cell is counted for what it is.
+#[test]
+fn a_grid_that_is_not_followed_is_counted_once() {
+    let r = reference(100, "CUT", "NOWHERE", [0.0, 0.0]);
+    let db = drawing(vec![with_grid(&r, 4, 4, 5.0, 5.0)], vec![]);
+    let c = contours(&db, JOIN_UM).unwrap();
+    assert_eq!(
+        c.not_read.get("INSERT_UNRESOLVED"),
+        Some(&1),
+        "{:?}",
+        c.not_read
+    );
+
+    let r = reference(101, "CUT", "SQ", [0.0, 0.0]);
+    let db = drawing(
+        vec![with_grid(&r, 0, 2, 5.0, 5.0)],
+        vec![("SQ", square(1, "0"))],
+    );
+    let c = contours(&db, JOIN_UM).unwrap();
+    assert_eq!(
+        c.not_read.get("INSERT_EMPTY_GRID"),
+        Some(&1),
+        "{:?}",
+        c.not_read
+    );
+    assert_eq!(counts(&c), (0, 0, 0));
+}

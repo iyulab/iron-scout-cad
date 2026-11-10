@@ -345,6 +345,7 @@ fn circle_in_a_block(x_scale: f64, y_scale: f64) -> CadDatabase {
             y: 0.0,
             z: 1.0,
         },
+        array: None,
     });
     let mut db = CadDatabase {
         entities: vec![insert],
@@ -449,6 +450,7 @@ fn a_block_that_references_itself_is_searched_once_and_the_cycle_named() {
                 y: 0.0,
                 z: 1.0,
             },
+            array: None,
         })
     };
     let mut db = CadDatabase {
@@ -717,6 +719,7 @@ fn a_chain_of_references_deeper_than_the_limit_says_so() {
                 y: 0.0,
                 z: 1.0,
             },
+            array: None,
         })
     };
     // L0 places L1, which places L2, ... down to L24: no block repeats.
